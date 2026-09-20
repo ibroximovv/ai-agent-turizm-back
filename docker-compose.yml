@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: turizm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-turizm_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-turizm_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Optional app container for containerized runs
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: turizm-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-turizm_db}
+      POSTGRES_SYNC: "false"
+      OWUI_URL: ${OWUI_URL:-http://localhost:8080}
+      OWUI_API_KEY: ${OWUI_API_KEY:-}
+      OWUI_KB_ID: ${OWUI_KB_ID:-}
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - app_uploads:/app/uploads
+
+volumes:
+  postgres_data:
+    driver: local
+  app_uploads:
+    driver: local
