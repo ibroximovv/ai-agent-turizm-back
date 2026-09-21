@@ -38,12 +38,12 @@ chunks: "14"
 ---
 
 ## 2. Script Detection & Transliteration (Cyrillic -> Latin)
-- **Script Detection (`detectScript`)**:
+- **Script Detection (`detect_script`)**:
   - Sample first 4000 characters.
   - Uzbek Cyrillic distinct characters: `ў, қ, ғ, ҳ, Ў, Қ, Ғ, Ҳ`.
   - Russian distinct characters: `ы, щ, Ы, Щ`.
 - **Transliteration Rules**:
-  1. **Uzbek Cyrillic (`uz-cyrl`)**: MUST be transliterated to Latin (`toLatin`). Without this, users querying in Latin script cannot match Cyrillic documents in vector or BM25 retrieval.
+  1. **Uzbek Cyrillic (`uz-cyrl`)**: MUST be transliterated to Latin (`to_latin`). Without this, users querying in Latin script cannot match Cyrillic documents in vector or BM25 retrieval.
   2. **Russian (`ru`)**: Preserved as-is (not transliterated).
   3. **Broken Font Repair**:
      - Word-ending `ии` caused by broken PDF glyph maps is repaired to `ий` (e.g. `маъмурии` -> `маъмурий`).

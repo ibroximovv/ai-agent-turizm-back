@@ -1,0 +1,77 @@
+{% extends "admin/base_site.html" %}
+{% load unfold %}
+
+{% block content %}
+<nav class="flex flex-wrap gap-2 mb-4 text-font-subtle-light text-xs dark:text-font-subtle-dark">
+  <a href="{% url 'admin:index' %}" class="hover:underline">Bosh sahifa</a>
+  <span>/</span>
+  <a href="{% url 'admin:catalog_material_changelist' %}" class="hover:underline">Materiallar</a>
+  <span>/</span>
+  <a href="{% url 'admin:catalog_material_change' material.pk %}" class="hover:underline">{{ material.original_filename }}</a>
+  <span>/</span>
+  <span class="text-font-important-light dark:text-font-important-dark">Markdown</span>
+</nav>
+
+<div class="flex flex-col gap-4">
+  {% if error %}
+    <div class="bg-red-50 border border-red-200 flex items-center gap-2 px-4 py-3 rounded-default text-red-700 text-sm dark:bg-red-500/10 dark:border-red-500/30 dark:text-red-400">
+      <span class="material-symbols-outlined text-[20px]">error</span>
+      {{ error }}
+    </div>
+  {% else %}
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {% component "unfold/components/card.html" with size="md" %}
+        <span class="text-font-subtle-light text-xs uppercase dark:text-font-subtle-dark">Chunklar</span>
+        <div class="font-semibold text-xl text-font-important-light dark:text-font-important-dark">{{ material.chunk_count }}</div>
+      {% endcomponent %}
+      {% component "unfold/components/card.html" with size="md" %}
+        <span class="text-font-subtle-light text-xs uppercase dark:text-font-subtle-dark">Belgilar</span>
+        <div class="font-semibold text-xl text-font-important-light dark:text-font-important-dark">{{ material.char_count }}</div>
+      {% endcomponent %}
+      {% component "unfold/components/card.html" with size="md" %}
+        <span class="text-font-subtle-light text-xs uppercase dark:text-font-subtle-dark">Yozuv</span>
+        <div class="font-semibold text-xl text-font-important-light dark:text-font-important-dark">{{ material.detected_script|default:"—" }}</div>
+      {% endcomponent %}
+      {% component "unfold/components/card.html" with size="md" %}
+        <span class="text-font-subtle-light text-xs uppercase dark:text-font-subtle-dark">Holati</span>
+        <div class="mt-1">
+          {% component "unfold/helpers/label.html" with text=material.get_status_display variant="primary" %}{% endcomponent %}
+        </div>
+      {% endcomponent %}
+    </div>
+
+    {% component "unfold/components/card.html" with title="Grounding markerli Markdown" title_icon="article" %}
+      <div class="flex flex-col gap-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <code class="bg-base-100 break-all px-2 py-1 rounded text-xs dark:bg-base-800">{{ material.md_file_path }}</code>
+          <button type="button" id="copy-md"
+                  class="border border-base-200 flex items-center gap-1.5 ml-auto px-2.5 py-1.5 rounded-default text-xs transition-all hover:bg-base-50 dark:border-base-700 dark:hover:bg-base-800">
+            <span class="material-symbols-outlined text-[16px]">content_copy</span>
+            Nusxalash
+          </button>
+        </div>
+        <pre id="md-body" class="bg-base-50 border border-base-200 leading-relaxed max-h-[65vh] overflow-auto p-4 rounded-default text-xs whitespace-pre-wrap break-words dark:bg-base-950 dark:border-base-800">{{ markdown }}</pre>
+      </div>
+    {% endcomponent %}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const button = document.getElementById("copy-md");
+  const body = document.getElementById("md-body");
+  if (!button || !body) return;
+
+  button.addEventListener("click", function () {
+    navigator.clipboard.writeText(body.textContent).then(function () {
+      const original = button.innerHTML;
+      button.textContent = "Nusxalandi";
+      setTimeout(function () { button.innerHTML = original; }, 1500);
+    });
+  });
+});
+</script>
+{% endblock %}

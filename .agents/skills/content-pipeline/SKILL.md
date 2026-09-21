@@ -16,7 +16,7 @@ This skill guides the agent through parsing, cleaning, transliterating, and inde
 
 ### 1. Ingestion & Deduplication
 - When a file is uploaded, calculate its SHA-256 hash (`file_hash`).
-- Check if a file with the same hash exists within the same module. If so, log a warning to `audit_logs`.
+- Reject the upload with `409 Conflict` if a byte-identical file is already attached to the same topic.
 - Set `materials.status` to `'queued'` and enqueue an asynchronous worker job.
 
 ### 2. Document Parsing & Text Cleaning
@@ -29,11 +29,11 @@ This skill guides the agent through parsing, cleaning, transliterating, and inde
    - Unwrap broken layout lines (`unwrap`).
 
 ### 3. Script Detection & Transliteration
-1. Analyze script (`detectScript`) from initial sample.
+1. Analyze script (`detect_script`) from initial sample.
 2. If `uz-cyrl`:
    - Fix corrupted glyphs (`final -ии` -> `-ий`).
    - Fix capital digraphs (`TO‘RTINChI` -> `TO‘RTINCHI`).
-   - Transliterate to Latin (`toLatin`).
+   - Transliterate to Latin (`to_latin`).
 3. If `ru`: preserve as-is without transliteration.
 
 ### 4. Grounding Marker Injection
