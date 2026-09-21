@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import * as fs from 'fs/promises';
 import * as path from 'path';
+import { Repository } from 'typeorm';
+import type { UploadsConfig } from '../../config/configuration.js';
 import {
   MaterialEntity,
   MaterialStatus,
@@ -17,9 +20,20 @@ import { TranslitService } from './services/translit.service.js';
 import { ChunkerService } from './services/chunker.service.js';
 import { OwuiService } from '../owui/owui.service.js';
 
+/** Characters of document text inspected when detecting the script. */
+const SCRIPT_SAMPLE_CHARS = 8000;
+
 @Injectable()
 export class PipelineService {
   private readonly logger = new Logger(PipelineService.name);
+
+  /**
+   * Materials currently being processed by this instance. Upload, retry and
+   * batch processing can all target the same material, and running the pipeline
+   * twice at once would have the two runs overwrite each other's status and
+   * Open WebUI file ids.
+   */
+  private readonly inFlight = new Set<string>();
 
   constructor(
     @InjectRepository(MaterialEntity)
@@ -33,7 +47,12 @@ export class PipelineService {
     private readonly translitService: TranslitService,
     private readonly chunkerService: ChunkerService,
     private readonly owuiService: OwuiService,
+    private readonly configService: ConfigService,
   ) {}
+
+  isProcessing(materialId: string): boolean {
+    return this.inFlight.has(materialId);
+  }
 
   /**
    * Run the full pipeline for a material: parse -> clean -> translit -> chunk -> index
@@ -52,8 +71,18 @@ export class PipelineService {
     const module = topic?.module;
 
     if (!topic || !module) {
-      throw new Error(`Topic or Module relation missing for material ${materialId}`);
+      throw new Error(
+        `Topic or Module relation missing for material ${materialId}`,
+      );
     }
+
+    if (this.inFlight.has(materialId)) {
+      this.logger.warn(
+        `Material ${materialId} is already being processed - skipping duplicate run.`,
+      );
+      return material;
+    }
+    this.inFlight.add(materialId);
 
     try {
       // 1. Stage: CONVERTING
@@ -69,11 +98,20 @@ export class PipelineService {
       );
 
       // 2. Parse file
-      const parsedDoc = await this.parserService.parseFile(material.raw_file_path);
+      const parsedDoc = await this.parserService.parseFile(
+        material.raw_file_path,
+      );
+
+      if (parsedDoc.chunks.length === 0) {
+        throw new Error(
+          'No extractable text found in the document - nothing to index.',
+        );
+      }
 
       // 3. Clean and transliterate chunks
-      const sampleText = parsedDoc.chunks.map((c) => c.text).join(' ');
-      const detectedScript = this.translitService.detectScript(sampleText);
+      const detectedScript = this.translitService.detectScript(
+        this.buildScriptSample(parsedDoc.chunks),
+      );
       material.detected_script = detectedScript;
 
       const processedChunks = parsedDoc.chunks.map((chunk) => {
@@ -88,10 +126,10 @@ export class PipelineService {
       });
 
       // 4. Inject grounding markers and build Markdown
-      const readyDir = path.resolve(process.cwd(), 'uploads/ready');
       const chunkResult = await this.chunkerService.buildGroundedMarkdown(
         processedChunks,
         {
+          materialId: material.id,
           moduleCode: module.code,
           moduleName: module.name,
           topicCode: topic.code,
@@ -100,7 +138,14 @@ export class PipelineService {
           originalFilename: material.original_filename,
           detectedScript,
         },
-        readyDir,
+        this.readyDir(),
+      );
+
+      // A rename (different filename fingerprint) would otherwise leave the
+      // previous markdown behind as an orphan.
+      await this.removeStaleMarkdown(
+        material.md_file_path,
+        chunkResult.filePath,
       );
 
       material.md_file_path = chunkResult.filePath;
@@ -114,7 +159,9 @@ export class PipelineService {
         module.id,
         'conversion',
         LogLevel.INFO,
-        `Converted to Markdown: ${chunkResult.chunkCount} chunks, ${chunkResult.charCount.toLocaleString()} chars, script: ${detectedScript}`,
+        `Converted to Markdown: ${chunkResult.chunkCount} chunks, ` +
+          `${chunkResult.markerCount} grounding markers, ` +
+          `${chunkResult.charCount.toLocaleString('en-US')} chars, script: ${detectedScript}`,
       );
 
       for (const warning of parsedDoc.warnings) {
@@ -133,7 +180,9 @@ export class PipelineService {
       return material;
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      this.logger.error(`Pipeline failed for material ${materialId}: ${errorMsg}`);
+      this.logger.error(
+        `Pipeline failed for material ${materialId}: ${errorMsg}`,
+      );
 
       material.status = MaterialStatus.FAILED;
       material.error_message = errorMsg;
@@ -148,6 +197,8 @@ export class PipelineService {
       );
 
       throw err;
+    } finally {
+      this.inFlight.delete(materialId);
     }
   }
 
@@ -155,10 +206,19 @@ export class PipelineService {
     material: MaterialEntity,
     module: ModuleEntity,
   ): Promise<void> {
-    const owuiStatus = await this.owuiService.checkConnection();
-    if (!owuiStatus.connected) {
+    // A cheap local check; the HTTP calls below report real connectivity
+    // problems through the catch block instead of costing an extra round trip
+    // per material.
+    if (!this.owuiService.isConfigured()) {
       this.logger.log(
-        `Open WebUI is not connected (${owuiStatus.message}). Material kept in md_ready state.`,
+        'OWUI_API_KEY is not configured. Material kept in md_ready state.',
+      );
+      await this.logAudit(
+        material.id,
+        module.id,
+        'indexing',
+        LogLevel.WARN,
+        'Skipped Open WebUI indexing: OWUI_API_KEY is not configured',
       );
       return;
     }
@@ -194,20 +254,30 @@ export class PipelineService {
           material.owui_file_id,
         );
         await this.owuiService.deleteFile(material.owui_file_id);
+        material.owui_file_id = undefined;
+      }
+
+      if (!material.md_file_path) {
+        throw new Error(
+          'Markdown file path is missing - conversion incomplete',
+        );
       }
 
       // Upload Markdown file
-      const filename = path.basename(material.md_file_path || material.original_filename);
-      const fs = await import('fs/promises');
-      const mdContent = await fs.readFile(material.md_file_path!, 'utf8');
+      const filename = path.basename(material.md_file_path);
+      const mdContent = await fs.readFile(material.md_file_path, 'utf8');
 
-      const uploaded = await this.owuiService.uploadMarkdownFile(filename, mdContent);
+      const uploaded = await this.owuiService.uploadMarkdownFile(
+        filename,
+        mdContent,
+      );
       material.owui_file_id = uploaded.id;
 
       // Add file to Knowledge Base
       await this.owuiService.addFileToKnowledgeBase(kbId, uploaded.id);
 
       material.status = MaterialStatus.INDEXED;
+      material.error_message = undefined;
       material.indexed_at = new Date();
       await this.materialRepo.save(material);
 
@@ -236,6 +306,35 @@ export class PipelineService {
     }
   }
 
+  /** Concatenates the leading chunks up to the script-detection sample size. */
+  private buildScriptSample(chunks: Array<{ text: string }>): string {
+    const parts: string[] = [];
+    let length = 0;
+    for (const chunk of chunks) {
+      parts.push(chunk.text);
+      length += chunk.text.length + 1;
+      if (length >= SCRIPT_SAMPLE_CHARS) break;
+    }
+    return parts.join(' ').slice(0, SCRIPT_SAMPLE_CHARS);
+  }
+
+  private readyDir(): string {
+    const uploads = this.configService.get<UploadsConfig>('uploads');
+    return uploads?.readyDir ?? path.resolve(process.cwd(), 'uploads', 'ready');
+  }
+
+  private async removeStaleMarkdown(
+    previousPath: string | undefined,
+    currentPath: string,
+  ): Promise<void> {
+    if (!previousPath || previousPath === currentPath) return;
+    await fs.unlink(previousPath).catch(() => undefined);
+  }
+
+  /**
+   * Audit logging must never be the reason a pipeline run fails, so write
+   * failures are reported to the application log and swallowed.
+   */
   private async logAudit(
     materialId: string | undefined,
     moduleId: string | undefined,
@@ -243,13 +342,18 @@ export class PipelineService {
     level: LogLevel,
     message: string,
   ): Promise<void> {
-    const log = this.auditLogRepo.create({
-      material_id: materialId,
-      module_id: moduleId,
-      stage,
-      level,
-      message,
-    });
-    await this.auditLogRepo.save(log);
+    try {
+      const log = this.auditLogRepo.create({
+        material_id: materialId,
+        module_id: moduleId,
+        stage,
+        level,
+        message,
+      });
+      await this.auditLogRepo.save(log);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to persist audit log (${stage}): ${msg}`);
+    }
   }
 }

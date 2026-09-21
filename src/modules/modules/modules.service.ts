@@ -2,20 +2,38 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { ModuleEntity } from '../../database/entities/module.entity.js';
-import { MaterialEntity } from '../../database/entities/material.entity.js';
+import {
+  MaterialEntity,
+  MaterialStatus,
+} from '../../database/entities/material.entity.js';
 import { CreateModuleDto } from './dto/create-module.dto.js';
 import { UpdateModuleDto } from './dto/update-module.dto.js';
 import { QueryModulesDto } from './dto/query-modules.dto.js';
 import { OwuiService } from '../owui/owui.service.js';
 import { PipelineService } from '../pipeline/pipeline.service.js';
 
+/**
+ * How many materials of a batch are converted at the same time. Parsing keeps
+ * whole documents in memory, so an unbounded fan-out over a large module would
+ * exhaust the heap.
+ */
+const BATCH_CONCURRENCY = 2;
+
+interface MaterialStats {
+  total: number;
+  byStatus: Record<string, number>;
+}
+
 @Injectable()
 export class ModulesService {
+  private readonly logger = new Logger(ModulesService.name);
+
   constructor(
     @InjectRepository(ModuleEntity)
     private readonly moduleRepo: Repository<ModuleEntity>,
@@ -43,7 +61,10 @@ export class ModulesService {
       );
     }
 
-    qb.orderBy('module.order_index', 'ASC').addOrderBy('module.created_at', 'ASC');
+    qb.orderBy('module.order_index', 'ASC').addOrderBy(
+      'module.created_at',
+      'ASC',
+    );
 
     const page = query.page || 1;
     const limit = query.limit || 20;
@@ -51,35 +72,20 @@ export class ModulesService {
 
     const [items, total] = await qb.getManyAndCount();
 
-    // Attach materials statistics for each module
-    const enhancedItems = await Promise.all(
-      items.map(async (mod: ModuleEntity) => {
-        const materialsStats = await this.materialRepo
-          .createQueryBuilder('mat')
-          .innerJoin('mat.topic', 'top')
-          .where('top.module_id = :moduleId', { moduleId: mod.id })
-          .select('mat.status', 'status')
-          .addSelect('COUNT(mat.id)', 'count')
-          .groupBy('mat.status')
-          .getRawMany();
+    // Materials statistics for the whole page in one grouped query.
+    const statsByModule = await this.materialStats(items.map((m) => m.id));
 
-        const stats: Record<string, number> = {};
-        let totalMaterials = 0;
-        for (const row of materialsStats) {
-          const count = parseInt(row.count, 10);
-          stats[row.status] = count;
-          totalMaterials += count;
-        }
-
-        (mod as any).topicsCount = mod.topics ? mod.topics.length : 0;
-        (mod as any).materialsCount = totalMaterials;
-        (mod as any).materialsByStatus = stats;
-        return mod;
-      }),
-    );
+    for (const mod of items) {
+      const stats = statsByModule.get(mod.id);
+      Object.assign(mod, {
+        topicsCount: mod.topics?.length ?? 0,
+        materialsCount: stats?.total ?? 0,
+        materialsByStatus: stats?.byStatus ?? {},
+      });
+    }
 
     return {
-      items: enhancedItems,
+      items,
       total,
       page,
       limit,
@@ -192,6 +198,8 @@ export class ModulesService {
   async processAllMaterials(id: string): Promise<{
     moduleId: string;
     totalQueued: number;
+    skipped: number;
+    concurrency: number;
     materials: Array<{ id: string; filename: string }>;
   }> {
     const mod = await this.findOne(id);
@@ -200,20 +208,86 @@ export class ModulesService {
       .createQueryBuilder('mat')
       .innerJoin('mat.topic', 'top')
       .where('top.module_id = :moduleId', { moduleId: mod.id })
+      .orderBy('mat.created_at', 'ASC')
       .getMany();
 
-    // Run processing asynchronously in background for each material
-    for (const material of materials) {
-      this.pipelineService.processMaterial(material.id).catch(() => {});
+    // Anything already mid-run is left alone rather than processed twice.
+    const queueable = materials.filter(
+      (m) => !this.pipelineService.isProcessing(m.id),
+    );
+
+    if (queueable.length > 0) {
+      await this.materialRepo.update(
+        { id: In(queueable.map((m) => m.id)) },
+        { status: MaterialStatus.QUEUED, error_message: undefined },
+      );
     }
+
+    void this.drainQueue(queueable.map((m) => m.id));
 
     return {
       moduleId: mod.id,
-      totalQueued: materials.length,
-      materials: materials.map((m) => ({
+      totalQueued: queueable.length,
+      skipped: materials.length - queueable.length,
+      concurrency: BATCH_CONCURRENCY,
+      materials: queueable.map((m) => ({
         id: m.id,
         filename: m.original_filename,
       })),
     };
+  }
+
+  /**
+   * Processes the queue in the background with a fixed number of workers, so a
+   * module with hundreds of documents cannot overwhelm the process.
+   */
+  private async drainQueue(materialIds: string[]): Promise<void> {
+    const queue = [...materialIds];
+
+    const worker = async (): Promise<void> => {
+      for (let next = queue.shift(); next; next = queue.shift()) {
+        try {
+          await this.pipelineService.processMaterial(next);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.error(`Batch processing failed for ${next}: ${msg}`);
+        }
+      }
+    };
+
+    const workers = Array.from(
+      { length: Math.min(BATCH_CONCURRENCY, queue.length) },
+      () => worker(),
+    );
+    await Promise.all(workers);
+  }
+
+  /** One grouped query for every module on the page instead of one per module. */
+  private async materialStats(
+    moduleIds: string[],
+  ): Promise<Map<string, MaterialStats>> {
+    const result = new Map<string, MaterialStats>();
+    if (moduleIds.length === 0) return result;
+
+    const rows = await this.materialRepo
+      .createQueryBuilder('mat')
+      .innerJoin('mat.topic', 'top')
+      .where('top.module_id IN (:...moduleIds)', { moduleIds })
+      .select('top.module_id', 'module_id')
+      .addSelect('mat.status', 'status')
+      .addSelect('COUNT(mat.id)', 'count')
+      .groupBy('top.module_id')
+      .addGroupBy('mat.status')
+      .getRawMany<{ module_id: string; status: string; count: string }>();
+
+    for (const row of rows) {
+      const count = Number.parseInt(row.count, 10) || 0;
+      const stats = result.get(row.module_id) ?? { total: 0, byStatus: {} };
+      stats.byStatus[row.status] = count;
+      stats.total += count;
+      result.set(row.module_id, stats);
+    }
+
+    return result;
   }
 }

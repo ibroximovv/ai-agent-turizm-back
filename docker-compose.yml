@@ -30,12 +30,15 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
+      UPLOADS_DIR: /app/uploads
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-turizm_db}
-      POSTGRES_SYNC: "false"
+      # No migrations exist yet, so the schema is created from the entities.
+      POSTGRES_SYNC: ${POSTGRES_SYNC:-true}
       OWUI_URL: ${OWUI_URL:-http://localhost:8080}
       OWUI_API_KEY: ${OWUI_API_KEY:-}
       OWUI_KB_ID: ${OWUI_KB_ID:-}

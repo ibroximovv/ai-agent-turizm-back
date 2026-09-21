@@ -12,6 +12,19 @@ import {
 import { TopicEntity } from './topic.entity.js';
 import { UserEntity } from './user.entity.js';
 
+/**
+ * `bigint` columns are returned as strings by the postgres driver, which would
+ * make `file_size` a string at runtime despite its `number` type. Converting on
+ * read keeps the entity and the API response honest.
+ */
+const bigintToNumber = {
+  to: (value?: number | null): number | null => value ?? 0,
+  from: (value?: string | number | null): number => {
+    if (value === null || value === undefined) return 0;
+    return typeof value === 'number' ? value : Number.parseInt(value, 10) || 0;
+  },
+};
+
 export enum MaterialType {
   PRESENTATION = 'presentation',
   QUESTIONS = 'questions',
@@ -49,7 +62,7 @@ export class MaterialEntity {
   @Column({ type: 'varchar', length: 300 })
   original_filename!: string;
 
-  @Column({ type: 'bigint', default: 0 })
+  @Column({ type: 'bigint', default: 0, transformer: bigintToNumber })
   file_size!: number;
 
   @Index('idx_materials_file_hash')

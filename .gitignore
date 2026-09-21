@@ -50,6 +50,9 @@ lerna-debug.log*
 .temp
 .tmp
 
+# Uploaded documents and generated Markdown (see UPLOADS_DIR)
+/uploads
+
 # Runtime data
 pids
 *.pid

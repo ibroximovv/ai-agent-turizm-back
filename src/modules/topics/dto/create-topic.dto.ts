@@ -5,8 +5,14 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
+  Min,
 } from 'class-validator';
+import {
+  CODE_PATTERN,
+  CODE_PATTERN_MESSAGE,
+} from '../../../common/constants.js';
 
 export class CreateTopicDto {
   @ApiProperty({
@@ -21,10 +27,12 @@ export class CreateTopicDto {
     description: 'Unique topic code within the module',
     example: 'topic-01',
     maxLength: 40,
+    pattern: CODE_PATTERN.source,
   })
   @IsString()
   @IsNotEmpty()
   @MaxLength(40)
+  @Matches(CODE_PATTERN, { message: CODE_PATTERN_MESSAGE })
   code!: string;
 
   @ApiProperty({
@@ -51,5 +59,6 @@ export class CreateTopicDto {
   })
   @IsOptional()
   @IsInt()
+  @Min(0)
   order_index?: number;
 }

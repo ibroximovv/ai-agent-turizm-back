@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import type { DatabaseConfig } from '../config/configuration.js';
 import {
   ModuleEntity,
   TopicEntity,
@@ -9,38 +10,38 @@ import {
   UserEntity,
 } from './entities/index.js';
 
+const ENTITIES = [
+  ModuleEntity,
+  TopicEntity,
+  MaterialEntity,
+  AuditLogEntity,
+  UserEntity,
+];
+
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('POSTGRES_HOST', 'localhost'),
-        port: configService.get<number>('POSTGRES_PORT', 5432),
-        username: configService.get<string>('POSTGRES_USER', 'postgres'),
-        password: configService.get<string>('POSTGRES_PASSWORD', 'postgres'),
-        database: configService.get<string>('POSTGRES_DB', 'turizm_db'),
-        entities: [
-          ModuleEntity,
-          TopicEntity,
-          MaterialEntity,
-          AuditLogEntity,
-          UserEntity,
-        ],
-        synchronize:
-          configService.get<string>('POSTGRES_SYNC', 'true') === 'true',
-        logging:
-          configService.get<string>('POSTGRES_LOGGING', 'false') === 'true',
-      }),
+      useFactory: (configService: ConfigService) => {
+        // Values come pre-parsed from the config factory, so `port` is a real
+        // number and the boolean flags are not the string "false".
+        const db = configService.getOrThrow<DatabaseConfig>('database');
+
+        return {
+          type: 'postgres' as const,
+          host: db.host,
+          port: db.port,
+          username: db.username,
+          password: db.password,
+          database: db.database,
+          entities: ENTITIES,
+          synchronize: db.synchronize,
+          logging: db.logging,
+        };
+      },
     }),
-    TypeOrmModule.forFeature([
-      ModuleEntity,
-      TopicEntity,
-      MaterialEntity,
-      AuditLogEntity,
-      UserEntity,
-    ]),
+    TypeOrmModule.forFeature(ENTITIES),
   ],
   exports: [TypeOrmModule],
 })

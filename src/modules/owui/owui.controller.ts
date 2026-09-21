@@ -22,7 +22,8 @@ export class OwuiController {
         baseUrl: 'http://localhost:8080',
         hasApiKey: true,
         knowledgeBasesCount: 4,
-        message: 'Successfully connected to Open WebUI (4 Knowledge Bases found)',
+        message:
+          'Successfully connected to Open WebUI (4 Knowledge Bases found)',
       },
     },
   })

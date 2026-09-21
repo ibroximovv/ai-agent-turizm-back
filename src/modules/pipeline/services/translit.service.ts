@@ -46,7 +46,14 @@ const UPPER_MAP: Record<string, string> = Object.fromEntries(
   Object.entries(MAP).map(([k, v]) => [k.toUpperCase(), v]),
 );
 
-const VOWEL_BEFORE_YE = new Set('аеёиоуўэюяАЕЁИОУЎЭЮЯ');
+/** Every Cyrillic letter the transliterator recognises, as a regex class. */
+const CYR_RUN = /[\u0400-\u04ff]+/g;
+
+/**
+ * `е` becomes `ye` at the start of a word and after a vowel or a hard/soft
+ * sign; elsewhere it is a plain `e`.
+ */
+const VOWEL_BEFORE_YE = new Set('аеёиоуўэюяъьАЕЁИОУЎЭЮЯЪЬ');
 const CYR_LETTER = 'а-яёўқғҳА-ЯЁЎҚҒҲ';
 const FIX_FINAL_II = new RegExp(`ии(?![${CYR_LETTER}])`, 'g');
 
@@ -63,7 +70,10 @@ export class TranslitService {
     return uz > 0 && uz >= ru;
   }
 
-  detectScript(text: string, sample: number = 4000): 'uz-latn' | 'uz-cyrl' | 'ru' | 'other' {
+  detectScript(
+    text: string,
+    sample: number = 4000,
+  ): 'uz-latn' | 'uz-cyrl' | 'ru' | 'other' {
     const chunk = text.slice(0, sample);
     let cyr = 0;
     let lat = 0;
@@ -103,7 +113,7 @@ export class TranslitService {
   }
 
   private translitWord(word: string): string {
-    const isUpper = word === word.toUpperCase() && /[а-яёўқғҳА-ЯЁЎҚҒҲ]/.test(word);
+    const isUpper = word === word.toUpperCase() && word !== word.toLowerCase();
     const withE = this.convertE(word);
     const out: string[] = [];
 
@@ -128,6 +138,9 @@ export class TranslitService {
 
   toLatin(text: string): string {
     const repaired = this.repairUzbekCyrillic(text);
-    return repaired.replace(/[а-яёўқғҳА-ЯЁЎҚҒҲ]+/gi, (m) => this.translitWord(m));
+    // Match the whole Cyrillic block so that letters outside the Uzbek subset
+    // (ё, ъ, ь, э and Russian loanword letters) are transliterated too instead
+    // of being left behind as stray Cyrillic inside Latin words.
+    return repaired.replace(CYR_RUN, (m) => this.translitWord(m));
   }
 }

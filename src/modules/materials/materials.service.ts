@@ -1,13 +1,22 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import {
+  buildStoredFilename,
+  decodeMultipartFilename,
+  sanitizePathSegment,
+} from '../../common/filename.js';
+import type { UploadsConfig } from '../../config/configuration.js';
 import {
   MaterialEntity,
   MaterialStatus,
@@ -22,6 +31,8 @@ const ALLOWED_EXTENSIONS = new Set(['.pdf', '.pptx', '.docx', '.txt', '.md']);
 
 @Injectable()
 export class MaterialsService {
+  private readonly logger = new Logger(MaterialsService.name);
+
   constructor(
     @InjectRepository(MaterialEntity)
     private readonly materialRepo: Repository<MaterialEntity>,
@@ -29,6 +40,7 @@ export class MaterialsService {
     private readonly topicRepo: Repository<TopicEntity>,
     private readonly pipelineService: PipelineService,
     private readonly owuiService: OwuiService,
+    private readonly configService: ConfigService,
   ) {}
 
   async findAll(query: QueryMaterialsDto) {
@@ -97,7 +109,7 @@ export class MaterialsService {
     file: Express.Multer.File | undefined,
     dto: UploadMaterialDto,
   ): Promise<MaterialEntity> {
-    if (!file) {
+    if (!file?.buffer) {
       throw new BadRequestException('No file provided for upload');
     }
 
@@ -105,13 +117,17 @@ export class MaterialsService {
       where: { id: dto.topic_id },
       relations: { module: true },
     });
-    if (!topic || !topic.module) {
+    if (!topic?.module) {
       throw new NotFoundException(
         `Target topic with ID "${dto.topic_id}" not found`,
       );
     }
 
-    const ext = path.extname(file.originalname).toLowerCase();
+    // Recover the real name before it reaches the database, the frontmatter
+    // and the grounding markers.
+    const originalName = decodeMultipartFilename(file.originalname);
+
+    const ext = path.extname(originalName).toLowerCase();
     if (!ALLOWED_EXTENSIONS.has(ext)) {
       throw new BadRequestException(
         `Unsupported file extension: ${ext}. Supported formats: ${Array.from(ALLOWED_EXTENSIONS).join(', ')}`,
@@ -121,34 +137,47 @@ export class MaterialsService {
     // 1. Calculate SHA-256 hash
     const hash = crypto.createHash('sha256').update(file.buffer).digest('hex');
 
-    // 2. Save raw file to disk: uploads/raw/{moduleCode}/{topicCode}/{filename}
-    const rawDir = path.resolve(
-      process.cwd(),
-      'uploads/raw',
-      topic.module.code,
-      topic.code,
+    // 2. Reject byte-identical re-uploads instead of indexing the same content
+    //    twice into the knowledge base.
+    const duplicate = await this.materialRepo.findOne({
+      where: { topic_id: topic.id, file_hash: hash },
+    });
+    if (duplicate) {
+      throw new ConflictException(
+        `An identical file is already attached to this topic as material "${duplicate.id}" ` +
+          `(${duplicate.original_filename}). Delete it first or use POST /api/materials/${duplicate.id}/retry.`,
+      );
+    }
+
+    // 3. Save raw file to disk: {uploads}/raw/{moduleCode}/{topicCode}/{hash}__{filename}
+    //    Codes originate from user input, so each segment is sanitised before it
+    //    becomes part of a filesystem path.
+    const rawDir = path.join(
+      this.uploads().rawDir,
+      sanitizePathSegment(topic.module.code),
+      sanitizePathSegment(topic.code),
     );
     await fs.mkdir(rawDir, { recursive: true });
 
-    const sanitizedFilename = file.originalname.replace(/[^a-zA-Z0-9._-]+/g, '_');
-    const rawFilePath = path.join(rawDir, sanitizedFilename);
+    const storedFilename = buildStoredFilename(originalName, ext, hash);
+    const rawFilePath = path.join(rawDir, storedFilename);
     await fs.writeFile(rawFilePath, file.buffer);
 
-    // 3. Create Material record
+    // 4. Create Material record
     const material = this.materialRepo.create({
       topic_id: topic.id,
       type: dto.type,
       raw_file_path: rawFilePath,
-      original_filename: file.originalname,
+      original_filename: originalName,
       file_size: file.size,
       file_hash: hash,
-      status: MaterialStatus.NEW,
+      status: MaterialStatus.QUEUED,
     });
 
     const saved = await this.materialRepo.save(material);
 
-    // 4. Trigger asynchronous processing pipeline
-    this.pipelineService.processMaterial(saved.id).catch(() => {});
+    // 5. Trigger asynchronous processing pipeline
+    this.runPipelineInBackground(saved.id);
 
     return saved;
   }
@@ -188,11 +217,22 @@ export class MaterialsService {
   async retry(id: string): Promise<MaterialEntity> {
     const material = await this.findOne(id);
 
-    // Re-trigger pipeline
-    this.pipelineService.processMaterial(material.id).catch(() => {});
+    if (this.pipelineService.isProcessing(material.id)) {
+      throw new ConflictException(
+        'This material is already being processed - wait for the current run to finish',
+      );
+    }
 
+    // Persist the queued state *before* starting the run: the pipeline loads
+    // its own copy of the entity, so saving this stale one afterwards would
+    // overwrite the status and results the run has already written.
     material.status = MaterialStatus.QUEUED;
-    return this.materialRepo.save(material);
+    material.error_message = undefined;
+    const queued = await this.materialRepo.save(material);
+
+    this.runPipelineInBackground(queued.id);
+
+    return queued;
   }
 
   async remove(id: string): Promise<{ success: boolean; message: string }> {
@@ -209,10 +249,10 @@ export class MaterialsService {
 
     // Remove files from disk
     if (material.raw_file_path) {
-      await fs.unlink(material.raw_file_path).catch(() => {});
+      await fs.unlink(material.raw_file_path).catch(() => undefined);
     }
     if (material.md_file_path) {
-      await fs.unlink(material.md_file_path).catch(() => {});
+      await fs.unlink(material.md_file_path).catch(() => undefined);
     }
 
     await this.materialRepo.remove(material);
@@ -221,5 +261,29 @@ export class MaterialsService {
       success: true,
       message: `Material "${material.original_filename}" deleted successfully`,
     };
+  }
+
+  /**
+   * The pipeline is intentionally not awaited so that uploads return promptly.
+   * Failures are already recorded on the material and in the audit log; they
+   * are logged here as well so an unattended run is never silently lost.
+   */
+  private runPipelineInBackground(materialId: string): void {
+    void this.pipelineService
+      .processMaterial(materialId)
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `Background pipeline run failed for ${materialId}: ${msg}`,
+        );
+      });
+  }
+
+  private uploads(): UploadsConfig {
+    const uploads = this.configService.get<UploadsConfig>('uploads');
+    if (!uploads) {
+      throw new Error('Uploads configuration is missing');
+    }
+    return uploads;
   }
 }

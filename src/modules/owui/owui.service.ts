@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosError, AxiosInstance, AxiosResponse } from 'axios';
+import type { OwuiConfig } from '../../config/configuration.js';
 
 export interface OwuiKnowledgeBase {
   id: string;
@@ -26,10 +27,9 @@ export class OwuiService {
   private readonly apiKey?: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.baseUrl = (
-      this.configService.get<string>('OWUI_URL', 'http://localhost:8080') || ''
-    ).replace(/\/$/, '');
-    this.apiKey = this.configService.get<string>('OWUI_API_KEY') || undefined;
+    const config = this.configService.get<OwuiConfig>('owui');
+    this.baseUrl = (config?.url ?? 'http://localhost:8080').replace(/\/+$/, '');
+    this.apiKey = config?.apiKey;
 
     const headers: Record<string, string> = {};
     if (this.apiKey) {
@@ -38,9 +38,14 @@ export class OwuiService {
 
     this.client = axios.create({
       baseURL: this.baseUrl,
-      timeout: 30000,
+      timeout: config?.timeoutMs ?? 30000,
       headers,
     });
+  }
+
+  /** True when an API key is present, i.e. calls have a chance of succeeding. */
+  isConfigured(): boolean {
+    return !!this.apiKey;
   }
 
   /**
@@ -53,7 +58,7 @@ export class OwuiService {
     knowledgeBasesCount?: number;
     message: string;
   }> {
-    if (!this.apiKey) {
+    if (!this.isConfigured()) {
       return {
         connected: false,
         baseUrl: this.baseUrl,
@@ -72,7 +77,7 @@ export class OwuiService {
         message: `Successfully connected to Open WebUI (${kbs.length} Knowledge Bases found)`,
       };
     } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = this.describeError(err);
       this.logger.warn(`Open WebUI connection check failed: ${errorMsg}`);
       return {
         connected: false,
@@ -87,13 +92,14 @@ export class OwuiService {
    * List all knowledge bases in Open WebUI.
    */
   async listKnowledgeBases(): Promise<OwuiKnowledgeBase[]> {
-    const res = await this.client.get('/api/v1/knowledge/');
-    if (Array.isArray(res.data)) {
-      return res.data;
-    }
-    if (res.data && Array.isArray(res.data.items)) {
-      return res.data.items;
-    }
+    const data = await this.request('List knowledge bases', () =>
+      this.client.get<OwuiKnowledgeBase[] | { items?: OwuiKnowledgeBase[] }>(
+        '/api/v1/knowledge/',
+      ),
+    );
+
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.items)) return data.items;
     return [];
   }
 
@@ -104,19 +110,23 @@ export class OwuiService {
     name: string,
     description: string = '',
   ): Promise<OwuiKnowledgeBase> {
-    const res = await this.client.post('/api/v1/knowledge/create', {
-      name,
-      description: description || name,
-    });
-    return res.data;
+    return this.request(`Create knowledge base "${name}"`, () =>
+      this.client.post<OwuiKnowledgeBase>('/api/v1/knowledge/create', {
+        name,
+        description: description || name,
+      }),
+    );
   }
 
   /**
    * Get knowledge base details by ID.
    */
   async getKnowledgeBase(kbId: string): Promise<OwuiKnowledgeBase> {
-    const res = await this.client.get(`/api/v1/knowledge/${kbId}`);
-    return res.data;
+    return this.request(`Get knowledge base ${kbId}`, () =>
+      this.client.get<OwuiKnowledgeBase>(
+        `/api/v1/knowledge/${encodeURIComponent(kbId)}`,
+      ),
+    );
   }
 
   /**
@@ -127,19 +137,18 @@ export class OwuiService {
     content: string | Buffer,
   ): Promise<OwuiFileUploadResult> {
     const formData = new FormData();
-    const buffer = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
+    const buffer =
+      typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
     const blob = new Blob([new Uint8Array(buffer)], { type: 'text/markdown' });
     formData.append('file', blob, filename);
 
-    const res = await this.client.post('/api/v1/files/', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-      params: {
-        process: 'true',
-      },
-    });
-    return res.data;
+    // The Content-Type header is intentionally left unset: axios derives it
+    // from the FormData together with the multipart boundary.
+    return this.request(`Upload "${filename}"`, () =>
+      this.client.post<OwuiFileUploadResult>('/api/v1/files/', formData, {
+        params: { process: 'true' },
+      }),
+    );
   }
 
   /**
@@ -149,9 +158,12 @@ export class OwuiService {
     kbId: string,
     fileId: string,
   ): Promise<{ success: boolean }> {
-    await this.client.post(`/api/v1/knowledge/${kbId}/file/add`, {
-      file_id: fileId,
-    });
+    await this.request(`Link file ${fileId} to KB ${kbId}`, () =>
+      this.client.post(
+        `/api/v1/knowledge/${encodeURIComponent(kbId)}/file/add`,
+        { file_id: fileId },
+      ),
+    );
     return { success: true };
   }
 
@@ -163,12 +175,13 @@ export class OwuiService {
     fileId: string,
   ): Promise<{ success: boolean }> {
     try {
-      await this.client.post(`/api/v1/knowledge/${kbId}/file/remove`, {
-        file_id: fileId,
-      });
+      await this.client.post(
+        `/api/v1/knowledge/${encodeURIComponent(kbId)}/file/remove`,
+        { file_id: fileId },
+      );
       return { success: true };
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = this.describeError(err);
       this.logger.warn(
         `Failed to remove file ${fileId} from KB ${kbId}: ${msg}`,
       );
@@ -181,12 +194,45 @@ export class OwuiService {
    */
   async deleteFile(fileId: string): Promise<{ success: boolean }> {
     try {
-      await this.client.delete(`/api/v1/files/${fileId}`);
+      await this.client.delete(`/api/v1/files/${encodeURIComponent(fileId)}`);
       return { success: true };
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = this.describeError(err);
       this.logger.warn(`Failed to delete file ${fileId} in OWUI: ${msg}`);
       return { success: false };
     }
+  }
+
+  /**
+   * Keeps the reason Open WebUI rejected a call attached to the error, so it
+   * reaches the material's `error_message` and the audit log.
+   */
+  private async request<T>(
+    label: string,
+    call: () => Promise<AxiosResponse<T>>,
+  ): Promise<T> {
+    try {
+      const res = await call();
+      return res.data;
+    } catch (err: unknown) {
+      throw new Error(`${label}: ${this.describeError(err)}`);
+    }
+  }
+
+  /**
+   * Axios reports every non-2xx as a bare "Request failed with status code
+   * 401", which hides the reason Open WebUI rejected the call.
+   */
+  private describeError(err: unknown): string {
+    if (axios.isAxiosError(err)) {
+      const axiosErr = err as AxiosError<{ detail?: string; message?: string }>;
+      const status = axiosErr.response?.status;
+      const detail =
+        axiosErr.response?.data?.detail ??
+        axiosErr.response?.data?.message ??
+        axiosErr.message;
+      return status ? `HTTP ${status}: ${detail}` : detail;
+    }
+    return err instanceof Error ? err.message : String(err);
   }
 }
