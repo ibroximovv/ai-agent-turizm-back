@@ -1,118 +1,180 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# AI Agent Turizm — Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Backend API and ingestion pipeline for the **AI Agent Turizm** educational
+system. It manages the content hierarchy (**Modules → Topics → Materials**) and
+converts raw documents (PDF, PPTX, DOCX, TXT, MD) into grounded Markdown
+knowledge bases synced with **Open WebUI** RAG agents.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+**Stack:** Bun · NestJS 12 · PostgreSQL · TypeORM · SWC · Oxlint · Vitest
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Why the pipeline exists
 
-## Project setup
+Open WebUI chunks documents for its vector store, and two things break in the
+process. This service fixes both before the text ever reaches the index.
 
-```bash
-$ bun install
+### 1. Source grounding (`[MANBA: ...]`)
+
+Vector chunking discards the surrounding context, so an answer cannot cite where
+it came from. The pipeline repeats a grounding marker roughly every 600
+characters, which guarantees that every vector chunk carries its own attribution:
+
+```markdown
+[MANBA: Constitution.pdf | page 14 | topic-01 | literature]
 ```
 
-## Compile and run the project
+Every generated document also starts with YAML frontmatter (`module_id`,
+`topic_id`, `source`, `script`, `chunks`, …).
+
+### 2. Uzbek transliteration (`uz-cyrl` → `uz-latn`)
+
+Latin-script queries do not match Cyrillic documents. The pipeline detects the
+script and transliterates Uzbek Cyrillic to Latin; Russian text is preserved
+as-is. Two common PDF/PPTX font-encoding defects are repaired on the way:
+
+| Defect | Example | Repaired to |
+| --- | --- | --- |
+| Corrupted word-final digraph | `-ии` | `-ий` |
+| Lowercase digraph tail in all-caps headings | `TO‘RTINChI` | `TO‘RTINCHI` |
+
+---
+
+## Setup
 
 ```bash
-# development
-$ bun run start
-
-# watch mode
-$ bun run start:dev
-
-# production mode
-$ bun run start:prod
+bun install
 ```
 
-## Run tests
+Copy the example environment file and adjust it:
 
 ```bash
-# unit tests
-$ bun run test
-
-# e2e tests
-$ bun run test:e2e
-
-# test coverage
-$ bun run test:cov
+cp .env.example .env
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Start PostgreSQL (and, optionally, the app itself) with Docker:
 
 ```bash
-$ bun install -g @nestjs/mau
-$ mau deploy
+docker compose up -d postgres
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Run the API:
 
-## Observability
+```bash
+bun run start:dev
+```
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+- API: <http://localhost:3005/api>
+- Swagger: <http://localhost:3005/api/docs>
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+---
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+## Environment variables
 
-This project is already instrumented. Create a free account at [observe.nestjs.com](https://observe.nestjs.com), add an application, and paste the generated app key and secret into the `ObserveModule.forRoot()` call in `src/app.module.ts`.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `NODE_ENV` | `development` | `development` \| `production` \| `test` |
+| `PORT` | `3000` | HTTP port |
+| `POSTGRES_HOST` | `localhost` | Database host |
+| `POSTGRES_PORT` | `5432` | Database port |
+| `POSTGRES_USER` | `postgres` | Database user |
+| `POSTGRES_PASSWORD` | `postgres` | Database password |
+| `POSTGRES_DB` | `turizm_db` | Database name |
+| `POSTGRES_SYNC` | `true` | Create/update the schema from entities |
+| `POSTGRES_LOGGING` | `false` | Log SQL statements |
+| `UPLOADS_DIR` | `<project>/uploads` | Root of `raw/` and `ready/` |
+| `MAX_UPLOAD_MB` | `200` | Upload size cap (HTTP 413 above it) |
+| `OWUI_URL` | `http://localhost:8080` | Open WebUI base URL |
+| `OWUI_API_KEY` | — | Bearer token; without it indexing is skipped |
+| `OWUI_KB_ID` | — | Optional default knowledge base |
+| `OWUI_TIMEOUT_MS` | `30000` | Open WebUI HTTP timeout |
 
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
+Values are validated at startup (`src/config/env.validation.ts`), so a bad port
+or an unknown `NODE_ENV` fails immediately instead of surfacing later as an
+obscure driver error.
 
-## Resources
+`POSTGRES_SYNC=true` lets TypeORM create and alter tables from the entities.
+There are **no migrations yet**, so turning it off in production leaves the
+database without a schema.
 
-Check out a few resources that may come in handy when working with NestJS:
+---
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## Ingestion flow
 
-## Support
+```
+POST /api/materials/upload
+  └─ sha256 + duplicate check → {UPLOADS_DIR}/raw/{module}/{topic}/{hash}__{name}
+     └─ pipeline (background)
+        1. parse    PDF pages / PPTX slides / DOCX+TXT sections
+        2. clean    typography, line unwrap, font repair
+        3. translit detect script; uz-cyrl → uz-latn
+        4. chunk    grounding markers + frontmatter
+                    → {UPLOADS_DIR}/ready/{module}/{topic}__{type}__{slug}-{hash}.md
+        5. index    upload to Open WebUI and link it to the module's KB
+```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+Material status moves `queued → converting → md_ready → uploading → indexed`,
+and lands on `failed` (with `error_message`) if a stage throws. If Open WebUI is
+unreachable or unconfigured, the material stays at `md_ready` and can be picked
+up later with `POST /api/materials/:id/retry`.
 
-## Stay in touch
+Each run is recorded in `audit_logs`, queryable via `GET /api/audit-logs`.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+Batch processing (`POST /api/modules/:id/process-all`) runs at a fixed
+concurrency of 2 so that a module with hundreds of documents cannot exhaust
+memory.
 
-## License
+---
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+## API surface
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api` | Health and service status |
+| `GET/POST /api/modules`, `GET/PATCH/DELETE /api/modules/:id` | Module CRUD |
+| `POST /api/modules/:id/kb` | Create or sync the module's Open WebUI KB |
+| `POST /api/modules/:id/process-all` | Re-run the pipeline for every material |
+| `GET/POST /api/topics`, `GET/PATCH/DELETE /api/topics/:id` | Topic CRUD |
+| `GET /api/materials`, `GET/DELETE /api/materials/:id` | Material listing and removal |
+| `POST /api/materials/upload` | Upload a document and start the pipeline |
+| `GET /api/materials/:id/content` | Preview the generated Markdown |
+| `POST /api/materials/:id/retry` | Re-run the pipeline |
+| `GET /api/audit-logs` | Pipeline and system history |
+| `GET /api/owui/status`, `GET /api/owui/knowledge-bases` | Open WebUI diagnostics |
+
+> **No authentication yet.** Every endpoint is open, so do not expose this
+> service directly to the internet. `users` and `materials.uploaded_by_id`
+> already exist in the schema for when auth is added.
+
+---
+
+## Commands
+
+```bash
+bun run start:dev     # dev server with hot reload (SWC watch)
+bun run build         # production build
+bun x tsc --noEmit    # type check
+bun run lint          # Oxlint with type-aware rules
+bun run format        # Prettier
+bun run test          # unit tests
+bun run test:e2e      # e2e tests (needs a reachable PostgreSQL)
+bun run test:cov      # coverage
+```
+
+---
+
+## Project layout
+
+```text
+src/
+├── common/       # pagination DTO, exception filter, logging interceptor, shared constants
+├── config/       # typed configuration factory + startup env validation
+├── database/     # TypeORM setup and entities
+└── modules/
+    ├── modules/  ├── topics/  ├── materials/  ├── audit-logs/
+    ├── owui/     # Open WebUI REST client
+    └── pipeline/ # parser, cleaner, translit, chunker + coordinator
+```
+
+See [CLAUDE.md](CLAUDE.md) for the full conventions (ESM `.js` import
+extensions, TypeORM relation syntax, database naming rules).

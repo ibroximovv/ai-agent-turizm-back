@@ -5,18 +5,26 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
+  Min,
 } from 'class-validator';
+import {
+  CODE_PATTERN,
+  CODE_PATTERN_MESSAGE,
+} from '../../../common/constants.js';
 
 export class CreateModuleDto {
   @ApiProperty({
     description: 'Unique module code identifier',
     example: 'module-01',
     maxLength: 40,
+    pattern: CODE_PATTERN.source,
   })
   @IsString()
   @IsNotEmpty()
   @MaxLength(40)
+  @Matches(CODE_PATTERN, { message: CODE_PATTERN_MESSAGE })
   code!: string;
 
   @ApiProperty({
@@ -31,7 +39,8 @@ export class CreateModuleDto {
 
   @ApiPropertyOptional({
     description: 'Detailed description of the module content and goals',
-    example: "O'zbekiston Respublikasi turizm sohasi bo'yicha qonunlar to'plami",
+    example:
+      "O'zbekiston Respublikasi turizm sohasi bo'yicha qonunlar to'plami",
   })
   @IsOptional()
   @IsString()
@@ -44,6 +53,7 @@ export class CreateModuleDto {
   })
   @IsOptional()
   @IsInt()
+  @Min(0)
   order_index?: number;
 
   @ApiPropertyOptional({

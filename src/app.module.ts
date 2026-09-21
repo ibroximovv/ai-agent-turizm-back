@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { createObserveModule } from '@nestjs/observe';
+import { configuration, validateEnv } from './config/index.js';
 import { DatabaseModule } from './database/database.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
@@ -17,7 +18,10 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env',
+      cache: true,
+      envFilePath: ['.env'],
+      load: [configuration],
+      validate: validateEnv,
     }),
     DatabaseModule,
     ObserveModule.forRoot({

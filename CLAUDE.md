@@ -67,9 +67,13 @@ The project follows a modular, feature-first NestJS architecture located under `
 src/
 ├── common/                     # Global utilities, filters, interceptors, common DTOs
 │   ├── dto/                    # PaginationQueryDto (page, limit, search)
-│   ├── filters/
-│   └── interceptors/
+│   ├── filters/                # AllExceptionsFilter (maps PG errors to 409/400)
+│   ├── interceptors/           # LoggingInterceptor
+│   ├── constants.ts            # CODE_PATTERN for module/topic codes
+│   └── filename.ts             # multipart filename decoding & path-safe names
 ├── config/                     # Environment configuration & validation
+│   ├── configuration.ts        # typed config factory (database, owui, uploads)
+│   └── env.validation.ts       # fail-fast startup validation
 ├── database/                   # Database provider & TypeORM entities
 │   └── entities/               # module, topic, material, audit-log, user entities
 │       ├── module.entity.ts
@@ -113,7 +117,11 @@ Module (1) ───< (N) Topic (1) ───< (N) Material (1) ───< (N) A
 - Constraints:
   - `modules`: `UNIQUE(code)` (e.g. `module-01`).
   - `topics`: `UNIQUE(module_id, code)` (unique within the module).
-  - `materials`: `file_hash` indexed for deduplication.
+  - `materials`: `file_hash` indexed for deduplication — uploading a
+    byte-identical file into the same topic is rejected with `409 Conflict`.
+- `modules.code` and `topics.code` must match `CODE_PATTERN`
+  (`/^[A-Za-z0-9][A-Za-z0-9._-]*$/`). They are used as directory names under
+  `UPLOADS_DIR`, so anything else would allow a path escape.
 
 ### Enum Types:
 - `MaterialType`: `'presentation'`, `'questions'`, `'literature'`
@@ -189,11 +197,21 @@ POSTGRES_DB=turizm_db
 POSTGRES_SYNC=true
 POSTGRES_LOGGING=false
 
+# Storage
+UPLOADS_DIR=          # defaults to <project>/uploads; holds raw/ and ready/
+MAX_UPLOAD_MB=200     # uploads above this are rejected with HTTP 413
+
 # Open WebUI Integration
 OWUI_URL=http://localhost:8080
 OWUI_API_KEY=
 OWUI_KB_ID=
+OWUI_TIMEOUT_MS=30000
 ```
+
+All of the above are validated at bootstrap by `src/config/env.validation.ts`
+and exposed as a typed, pre-parsed object by `src/config/configuration.ts`.
+Read them through `ConfigService.get<...>('database' | 'owui' | 'uploads')`
+rather than touching `process.env` in feature code.
 
 ---
 

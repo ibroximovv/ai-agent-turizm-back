@@ -87,7 +87,8 @@ export class TopicsController {
   @Delete(':id')
   @ApiOperation({
     summary: 'Delete a topic',
-    description: 'Deletes a topic and cascades to all its materials and audit logs.',
+    description:
+      'Deletes a topic and cascades to all its materials and audit logs.',
   })
   @ApiResponse({
     status: 200,

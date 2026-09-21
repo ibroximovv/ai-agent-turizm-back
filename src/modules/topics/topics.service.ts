@@ -39,7 +39,10 @@ export class TopicsService {
       );
     }
 
-    qb.orderBy('topic.order_index', 'ASC').addOrderBy('topic.created_at', 'ASC');
+    qb.orderBy('topic.order_index', 'ASC').addOrderBy(
+      'topic.created_at',
+      'ASC',
+    );
 
     const page = query.page || 1;
     const limit = query.limit || 20;
@@ -47,11 +50,12 @@ export class TopicsService {
 
     const [items, total] = await qb.getManyAndCount();
 
+    for (const topic of items) {
+      Object.assign(topic, { materialsCount: topic.materials?.length ?? 0 });
+    }
+
     return {
-      items: items.map((t) => {
-        (t as any).materialsCount = t.materials ? t.materials.length : 0;
-        return t;
-      }),
+      items,
       total,
       page,
       limit,

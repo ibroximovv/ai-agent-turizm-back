@@ -18,6 +18,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { maxUploadBytes } from '../../config/configuration.js';
 import { MaterialsService } from './materials.service.js';
 import { UploadMaterialDto } from './dto/upload-material.dto.js';
 import { QueryMaterialsDto } from './dto/query-materials.dto.js';
@@ -59,7 +60,21 @@ export class MaterialsController {
     status: 400,
     description: 'Unsupported file format or invalid input',
   })
-  @UseInterceptors(FileInterceptor('file'))
+  @ApiResponse({
+    status: 409,
+    description: 'A byte-identical file is already attached to this topic',
+  })
+  @ApiResponse({
+    status: 413,
+    description: 'File exceeds the configured MAX_UPLOAD_MB limit',
+  })
+  @UseInterceptors(
+    // Without an explicit limit Multer would buffer a file of any size in
+    // memory, so the documented cap is enforced here.
+    FileInterceptor('file', {
+      limits: { fileSize: maxUploadBytes(), files: 1 },
+    }),
+  )
   async upload(
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: UploadMaterialDto,
@@ -110,6 +125,10 @@ export class MaterialsController {
   @ApiResponse({
     status: 200,
     description: 'Material enqueued for retry',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'A pipeline run for this material is already in progress',
   })
   async retry(@Param('id', ParseUUIDPipe) id: string) {
     return this.materialsService.retry(id);
