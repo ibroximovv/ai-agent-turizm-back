@@ -36,10 +36,20 @@ This project is the **Backend API, Admin Panel and Ingestion Pipeline** for the
    - Russian texts (`ru`) are preserved as-is without transliteration.
    - Corrupted PDF font encodings (`final -ии` → `-ий`) and all-caps digraphs
      (`TO‘RTINChI` → `TO‘RTINCHI`) are repaired automatically.
-3. **Open WebUI Integration**
+3. **Open WebUI Integration — the admin panel is the source of truth**
    - Pure HTTP REST integration (`OWUI_URL` + Bearer `OWUI_API_KEY`) via httpx.
-   - Automatically creates or links module Knowledge Bases, uploads processed
-     Markdown, and links it to the KB.
+   - Every module owns one Knowledge Base (`modules.owui_kb_id`) and one agent
+     (`modules.owui_model_id`, a workspace model preset reading only that KB).
+     One master agent (`OWUI_MASTER_MODEL_ID`) reads every active module's KB;
+     its knowledge list is rebuilt from the database on every sync.
+   - `apps/owui/sync.py` owns this wiring. Agents are only *created* from
+     `apps/owui/prompts/*.md`; an adopted/existing agent keeps its prompt and
+     only has its knowledge list, activity and sharing rewritten.
+   - Uploads use `process_in_background=false`: linking a file whose
+     background extraction has not finished fails with "empty content".
+   - Deletions clean Open WebUI up through `apps/catalog/signals.py` (on
+     commit), so cascades and admin inlines are covered too. Tests that assert
+     on the cleanup need `django_capture_on_commit_callbacks(execute=True)`.
 
 ---
 
@@ -105,13 +115,16 @@ apps/
 │   ├── api/                # serializers.py, views.py
 │   └── management/commands/adopt_legacy_schema.py
 ├── owui/                   # Open WebUI REST client + diagnostics endpoints
+│   ├── sync.py             # module KB + module agent + master agent wiring
+│   └── prompts/            # module_agent.md / master_agent.md templates
 └── pipeline/
     ├── services/parser.py    # PDF (pypdf), PPTX (python-pptx), DOCX (mammoth), TXT, MD
     ├── services/cleaner.py   # Typography, line unwrap, font repair (uses `regex`)
     ├── services/translit.py  # Script detection & Uzbek Cyrillic → Latin
     ├── services/chunker.py   # Grounding marker injection (~600 chars) & frontmatter
     ├── service.py            # End-to-end pipeline coordinator
-    └── runner.py             # Thread pool + in-flight registry
+    ├── runner.py             # Thread pool + in-flight registry
+    └── recovery.py           # Re-queues materials a restart interrupted
 templates/admin/            # dashboard.html, catalog/{content_tree,material_upload,
                             #   material_markdown,material_list_before}.html
 tests/                      # pipeline/, api/, admin/, common/
@@ -179,6 +192,9 @@ Module (1) ───< (N) Topic (1) ───< (N) Material (1) ───< (N) A
 - Worker threads must not hold database connections open: `runner` calls
   `close_old_connections()` around each task.
 - Set `PIPELINE_RUN_SYNC=true` in tests so results are observable immediately.
+- The queue is in-process: `config/wsgi.py` calls
+  `recovery.resume_in_background()` so rows left `queued` / `converting` /
+  `uploading` by a restart are submitted again.
 
 ### 5.4. API responses
 - List endpoints return `{items, total, page, limit, totalPages}` via
@@ -218,6 +234,11 @@ Module (1) ───< (N) Topic (1) ───< (N) Material (1) ───< (N) A
   original TypeScript specs — treat those assertions as the contract.
 - `tests/conftest.py` forces uploads into `tmp_path` and blanks `OWUI_API_KEY`,
   because the developer `.env` points at a live Open WebUI instance.
+- `tests/owui/fake_owui.py` is an in-memory Open WebUI behind
+  `httpx.MockTransport`; use its `owui` fixture pattern (see
+  `tests/owui/test_sync.py`) for anything that talks to Open WebUI.
+- Admin tests need collected static files (`python manage.py collectstatic`),
+  because pytest runs with `DEBUG=False` and the manifest storage.
 
 ---
 

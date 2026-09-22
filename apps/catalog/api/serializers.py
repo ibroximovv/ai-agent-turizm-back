@@ -9,6 +9,7 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from apps.catalog.models import AuditLog, Material, MaterialType, Module, Topic
+from config.app_config import owui_config
 
 
 class ModuleBriefSerializer(serializers.ModelSerializer):
@@ -35,10 +36,10 @@ class ModuleSerializer(serializers.ModelSerializer):
         model = Module
         fields = [
             "id", "code", "name", "description", "order_index",
-            "owui_kb_id", "is_active", "created_at", "updated_at",
+            "owui_kb_id", "owui_model_id", "is_active", "created_at", "updated_at",
             "topics", "topicsCount", "materialsCount", "materialsByStatus",
         ]
-        read_only_fields = ["id", "owui_kb_id", "created_at", "updated_at"]
+        read_only_fields = ["id", "owui_kb_id", "owui_model_id", "created_at", "updated_at"]
 
     # The view attaches `_stats` from one grouped query for the whole page.
     def _stats(self, obj) -> dict:
@@ -57,11 +58,44 @@ class ModuleSerializer(serializers.ModelSerializer):
 class ModuleWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Module
-        fields = ["code", "name", "description", "order_index", "is_active"]
+        fields = [
+            "code", "name", "description", "order_index", "is_active",
+            "owui_kb_id", "owui_model_id",
+        ]
         extra_kwargs = {
             "code": {"help_text": "Masalan: module-01"},
             "name": {"help_text": "Modulning to'liq nomi"},
+            "owui_kb_id": {
+                "help_text": "Mavjud Open WebUI Knowledge Base ID. Bo'sh — avtomatik yaratiladi."
+            },
+            "owui_model_id": {
+                "help_text": (
+                    "Mavjud Open WebUI agent (model preset) ID. Bo'sh — avtomatik yaratiladi."
+                )
+            },
         }
+
+    def _validate_unique(self, field: str, value: str | None, what: str) -> str | None:
+        value = (value or "").strip() or None
+        if value:
+            queryset = Module.objects.filter(**{field: value})
+            if self.instance is not None:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            clash = queryset.first()
+            if clash is not None:
+                raise serializers.ValidationError(
+                    f'Bu {what} allaqachon "{clash.code}" moduliga biriktirilgan'
+                )
+        return value
+
+    def validate_owui_kb_id(self, value):
+        return self._validate_unique("owui_kb_id", value, "Knowledge Base")
+
+    def validate_owui_model_id(self, value):
+        value = self._validate_unique("owui_model_id", value, "agent")
+        if value and value == owui_config().master_model_id:
+            raise serializers.ValidationError("Umumiy agentni modulga biriktirib bo'lmaydi")
+        return value
 
     def validate_code(self, value: str) -> str:
         queryset = Module.objects.filter(code=value)
@@ -179,6 +213,10 @@ class KbSyncResultSerializer(serializers.Serializer):
     module = ModuleBriefSerializer()
     kb = serializers.DictField()
     created = serializers.BooleanField()
+    agentId = serializers.CharField(allow_null=True)
+    agentCreated = serializers.BooleanField()
+    masterAgentId = serializers.CharField(allow_null=True)
+    summary = serializers.CharField()
 
 
 class BatchProcessResultSerializer(serializers.Serializer):

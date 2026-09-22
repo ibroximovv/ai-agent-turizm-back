@@ -33,6 +33,7 @@ from apps.catalog.models import (
     Module,
     Topic,
 )
+from apps.owui.sync import sync_module_safely
 from apps.pipeline import service as pipeline_service
 
 UUID_REGEX = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -126,6 +127,9 @@ class ModuleViewSet(viewsets.ModelViewSet):
         write = ModuleWriteSerializer(data=request.data)
         write.is_valid(raise_exception=True)
         module = write.save()
+        # Best effort: the module exists either way, and POST /modules/{id}/kb
+        # retries the Open WebUI side.
+        sync_module_safely(module)
         return Response(ModuleSerializer(module).data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -134,7 +138,14 @@ class ModuleViewSet(viewsets.ModelViewSet):
             instance, data=request.data, partial=kwargs.pop("partial", False)
         )
         write.is_valid(raise_exception=True)
+        synced = ("owui_kb_id", "owui_model_id", "name", "is_active")
+        before = {field: getattr(instance, field) for field in synced}
         module = write.save()
+        if any(getattr(module, field) != value for field, value in before.items()):
+            sync_module_safely(module)
+            if module.owui_kb_id != before["owui_kb_id"] and before["owui_kb_id"]:
+                # Materials indexed into the previous KB move with the module.
+                pipeline_service.queue_module_materials(module)
         return Response(ModuleSerializer(module).data)
 
     def destroy(self, request, *args, **kwargs):
@@ -149,7 +160,11 @@ class ModuleViewSet(viewsets.ModelViewSet):
         )
 
     @extend_schema(
-        summary="Modul uchun Open WebUI Knowledge Base yaratish/sinxronlash",
+        summary="Modul uchun Open WebUI Knowledge Base va agentlarni sinxronlash",
+        description=(
+            "Modul KB'sini yaratadi yoki mavjudini ishlatadi, modul agentini shu KB'ga "
+            "bog'laydi va umumiy agentning bilim bazalari ro'yxatini yangilaydi."
+        ),
         request=None,
         responses={200: KbSyncResultSerializer},
     )

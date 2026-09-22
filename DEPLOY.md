@@ -291,9 +291,28 @@ BRANCH=dev ./deploy/deploy.sh
 
 **Qayta ishga tushirish yarim yo'ldagi konvertatsiyani to'xtatadi.**
 `pm2 restart` jarayonni o'ldiradi, u bilan birga fon threadlari ham ketadi.
-Bunday materiallar bazada `converting` holatida qolib ketadi. `deploy.sh`
-ularning sonini xabar qiladi — adminkadan tanlab **"Pipeline'ni qayta ishga
-tushirish"** amalini bajaring.
+Yangi jarayon ishga tushishi bilan `queued` / `converting` / `uploading`
+holatida qolgan materiallarni o'zi qayta navbatga qo'yadi
+(`PIPELINE_RESUME_ON_START=true`, `apps/pipeline/recovery.py`). O'chirilgan
+bo'lsa, adminkadan **"Pipeline'ni qayta ishga tushirish"** amalini bajaring.
+
+**Open WebUI (`ai.ocomarket.uz`) oldidagi nginx taymauti.** Fayl yuklash va
+KB'ga qo'shish endi embedding tugaguncha kutadi (`OWUI_INDEX_TIMEOUT_MS`,
+standart 10 daqiqa). O'sha serverdagi nginx'ning `proxy_read_timeout` va
+`proxy_send_timeout` qiymatlari standart 60 soniyada qolsa, katta hujjat 504
+bilan uziladi va material `md_ready` holatida qoladi. Open WebUI server
+blokiga qo'shing:
+
+```nginx
+proxy_read_timeout 600s;
+proxy_send_timeout 600s;
+client_max_body_size 200m;
+```
+
+**Modul 1 ni mavjud agentga ulash.** Adminkada modul formasining "Open WebUI"
+bo'limida Knowledge Base va agentni ro'yxatdan tanlang (masalan
+`modul-1---gid-yordamchisi`). Saqlanganda agentning bilim bazasi shu KB'ga,
+umumiy agentniki esa barcha faol modullarga bog'lanadi.
 
 **Nega bitta worker?** Navbat va "hozir ishlanmoqda" ro'yxati jarayon
 xotirasida (`apps/pipeline/runner.py`). Ikkinchi worker o'z nusxasiga ega

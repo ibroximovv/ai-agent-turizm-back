@@ -189,14 +189,18 @@ class TestMaterialUpload:
         response = self._upload(auth_api, topic, name="big.txt", content="x" * (6 * 1024 * 1024))
         assert response.status_code == 413
 
-    def test_delete_removes_the_files_from_disk(self, auth_api, topic):
+    def test_delete_removes_the_files_from_disk(
+        self, auth_api, topic, django_capture_on_commit_callbacks
+    ):
         from pathlib import Path
 
         material = Material.objects.get(pk=self._upload(auth_api, topic).json()["id"])
         raw_path, md_path = Path(material.raw_file_path), Path(material.md_file_path)
         assert raw_path.exists() and md_path.exists()
 
-        assert auth_api.delete(f"/api/materials/{material.id}").status_code == 200
+        # Cleanup runs once the delete commits (apps/catalog/signals.py).
+        with django_capture_on_commit_callbacks(execute=True):
+            assert auth_api.delete(f"/api/materials/{material.id}").status_code == 200
         assert not raw_path.exists()
         assert not md_path.exists()
         assert Material.objects.count() == 0

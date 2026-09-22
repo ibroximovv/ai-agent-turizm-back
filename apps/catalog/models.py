@@ -79,6 +79,10 @@ class Module(UUIDModel, TimestampedModel):
         _("Open WebUI KB ID"), max_length=64, null=True, blank=True,
         help_text=_("Modul uchun Open WebUI Knowledge Base identifikatori."),
     )
+    owui_model_id = models.CharField(
+        _("Open WebUI agent ID"), max_length=128, null=True, blank=True,
+        help_text=_("Faqat shu modul bilim bazasidan javob beradigan agent (model preset)."),
+    )
     is_active = models.BooleanField(_("Faol"), default=True)
 
     class Meta:

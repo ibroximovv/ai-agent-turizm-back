@@ -13,6 +13,32 @@ drf-spectacular · pytest · Ruff
 
 ---
 
+## Bilim bazasi va agentlar — adminka yagona manba
+
+Open WebUI'dagi hamma narsa adminkadan boshqariladi:
+
+| Adminkada | Open WebUI'da |
+| --- | --- |
+| Modul | o'z **Knowledge Base**'i (`modules.owui_kb_id`) va faqat shu bazadan javob beradigan **modul agenti** (`modules.owui_model_id`) |
+| Barcha faol modullar | bitta **umumiy agent** (`OWUI_MASTER_MODEL_ID`) — hamma modul KB'lari bo'yicha qidiradi |
+| Material | KB'dagi bitta Markdown fayl |
+
+- Modul saqlanganda (yoki birinchi material indekslanganda) KB va agent bo'lmasa
+  yaratiladi, umumiy agentning bilim bazalari ro'yxati bazadan qayta quriladi.
+- Modul formasida Open WebUI'da **mavjud** KB va agentni tanlash mumkin. Tanlangan
+  agentning prompti va sozlamalari o'zgarmaydi — faqat bilim bazasi ro'yxati,
+  faolligi va ruxsatlari yangilanadi. Yangi agentlar esa
+  `apps/owui/prompts/{module,master}_agent.md` shablonidan va
+  `OWUI_AGENT_TEMPLATE_MODEL_ID` preset'ining sozlamalaridan (vositalar,
+  capabilities, parametrlar) yaratiladi.
+- Material, mavzu yoki modul o'chirilsa (qaysi yo'l bilan bo'lmasin — API, adminka,
+  kaskad) Open WebUI'dagi fayllar, modul KB'si va modul agenti ham o'chadi, umumiy
+  agent yangilanadi (`apps/catalog/signals.py`).
+- Server qayta ishga tushsa, yarim yo'lda qolgan materiallar avtomatik qayta
+  navbatga qo'yiladi (`apps/pipeline/recovery.py`).
+
+---
+
 ## Pipeline nima uchun kerak
 
 Open WebUI hujjatlarni vektor bazasi uchun bo'laklarga ajratadi va shu jarayonda
@@ -126,7 +152,7 @@ rejim, Tailwind komponentlari.
 | **Dashboard** | Modul/mavzu/material hisoblagichlari, oxirgi 2 haftalik yuklash grafigi, pipeline holati kesimi, modullar bo'yicha indekslash foizi, oxirgi xatoliklar |
 | **Kontent daraxti** | Modul → mavzu → material ierarxiyasi bitta ekranda, qidiruv va holat nuqtalari bilan |
 | **Hujjat yuklash** | Drag & drop, bir vaqtda bir nechta fayl, har biri uchun progress bar, yuklangandan keyin holat avtomatik yangilanadi |
-| **Modullar** | Mavzular inline; qator tugmalari: *KB sinxronlash*, *barchasini qayta ishlash* |
+| **Modullar** | Mavzular inline; KB va agentni Open WebUI ro'yxatidan tanlash; qator tugmalari: *Open WebUI sinxronlash*, *barchasini qayta ishlash*; ro'yxat tugmasi: *Umumiy agentni yangilash* |
 | **Mavzular** | Materiallar inline ko'rinadi |
 | **Materiallar** | Rangli holat chiplari; qator tugmalari: *Qayta ishlash*, *Markdown*. Ro'yxat konvertatsiya davom etayotganda o'zini yangilaydi. O'chirish diskdagi fayllarni va Open WebUI nusxasini ham tozalaydi |
 | **Audit yozuvlari** | Faqat o'qish uchun pipeline tarixi |
@@ -174,7 +200,7 @@ curl http://localhost:3005/api/modules -H "Authorization: Bearer <access>"
 | `GET` … | `/api/auth/users` | Foydalanuvchilar CRUD (admin) |
 | `GET` `POST` | `/api/modules` | Modullar ro'yxati / yaratish |
 | `GET` `PATCH` `DELETE` | `/api/modules/{id}` | Modul tafsiloti / tahrir / o'chirish |
-| `POST` | `/api/modules/{id}/kb` | Open WebUI KB yaratish / sinxronlash |
+| `POST` | `/api/modules/{id}/kb` | Modul KB'si, modul agenti va umumiy agentni sinxronlash |
 | `POST` | `/api/modules/{id}/process-all` | Modulning barcha materiallarini qayta ishlash |
 | `GET` `POST` | `/api/topics` | Mavzular ro'yxati / yaratish |
 | `GET` `PATCH` `DELETE` | `/api/topics/{id}` | Mavzu tafsiloti / tahrir / o'chirish |
@@ -212,11 +238,19 @@ Har bir yo'l oxirgi `/` bilan ham, usiz ham ishlaydi.
 | `PIPELINE_RUN_SYNC` | `false` | Pipeline'ni fon o'rniga inline ishlatish |
 | `OWUI_URL` / `OWUI_API_KEY` | — | Open WebUI integratsiyasi |
 | `OWUI_TIMEOUT_MS` | `30000` | Open WebUI so'rovlari uchun taymaut |
+| `OWUI_INDEX_TIMEOUT_MS` | `600000` | Fayl yuklash / KB'ga qo'shish (embedding) taymauti |
+| `OWUI_AGENT_BASE_MODEL` | `turizm_router.avto` | Yangi agentlar ishlaydigan asosiy model |
+| `OWUI_AGENT_TOOL_IDS` | `ofis_saqlash_tool` | Yangi agentlarga ulanadigan vositalar (vergul bilan) |
+| `OWUI_AGENT_TEMPLATE_MODEL_ID` | `modul-1---gid-yordamchisi` | Sozlamalari yangi agentlarga ko'chiriladigan preset |
+| `OWUI_MASTER_MODEL_ID` / `OWUI_MASTER_MODEL_NAME` | `turizm-umumiy-agent` / `Turizm — umumiy gid yordamchisi` | Umumiy agent |
+| `OWUI_SHARE_WITH_USERS` | `true` | Agentlar va KB'larni barcha Open WebUI foydalanuvchilariga ochish |
+| `PIPELINE_RESUME_ON_START` | `true` | Restartda uzilgan materiallarni qayta navbatga qo'yish |
 | `CORS_ALLOW_ALL_ORIGINS` / `CORS_ALLOWED_ORIGINS` | `true` / — | Brauzerdan murojaat siyosati |
 | `LANGUAGE_CODE` / `TIME_ZONE` | `uz` / `Asia/Tashkent` | Lokal sozlamalar |
 
-> Knowledge Base identifikatori muhit o'zgaruvchisi emas: har bir modul o'zining
-> KB'siga ega va u `modules.owui_kb_id` ustunida saqlanadi.
+> Knowledge Base va agent identifikatorlari muhit o'zgaruvchisi emas: har bir modul
+> o'zinikiga ega va ular `modules.owui_kb_id` / `modules.owui_model_id` ustunlarida
+> saqlanadi.
 
 ---
 

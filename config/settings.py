@@ -354,7 +354,20 @@ OWUI = build_owui_config(
     url=env.str("OWUI_URL", default="http://localhost:8080"),
     api_key=env.str("OWUI_API_KEY", default=""),
     timeout_ms=env.int("OWUI_TIMEOUT_MS", default=30000),
+    index_timeout_ms=env.int("OWUI_INDEX_TIMEOUT_MS", default=600000),
+    agent_base_model=env.str("OWUI_AGENT_BASE_MODEL", default="turizm_router.avto"),
+    agent_tool_ids=env.list("OWUI_AGENT_TOOL_IDS", default=["ofis_saqlash_tool"]),
+    agent_template_model_id=env.str(
+        "OWUI_AGENT_TEMPLATE_MODEL_ID", default="modul-1---gid-yordamchisi"
+    ),
+    master_model_id=env.str("OWUI_MASTER_MODEL_ID", default="turizm-umumiy-agent"),
+    master_model_name=env.str(
+        "OWUI_MASTER_MODEL_NAME", default="Turizm — umumiy gid yordamchisi"
+    ),
+    share_with_users=env.bool("OWUI_SHARE_WITH_USERS", default=True),
 )
+# Re-queue materials a restart interrupted mid-run (see apps/pipeline/recovery.py).
+PIPELINE_RESUME_ON_START = env.bool("PIPELINE_RESUME_ON_START", default=True)
 
 # --------------------------------------------------------------------------
 # Pipeline

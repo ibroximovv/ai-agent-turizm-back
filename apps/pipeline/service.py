@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from apps.catalog.models import AuditLog, LogLevel, Material, MaterialStatus, Module
 from apps.owui.client import OwuiError, get_owui_client
+from apps.owui.sync import ensure_module_kb, sync_master_agent, sync_module_agent
 from apps.pipeline import runner
 from apps.pipeline.services.chunker import GroundingMetadata, build_grounded_markdown
 from apps.pipeline.services.cleaner import clean_text
@@ -199,15 +200,10 @@ def _index_to_owui(material: Material, module: Module) -> None:
     try:
         _set_status(material, MaterialStatus.UPLOADING)
 
-        # Ensure a Knowledge Base exists for the module.
-        kb_id = module.owui_kb_id
-        if not kb_id:
-            created = client.create_knowledge_base(
-                f"{module.code} - {module.name}", module.description or module.name
-            )
-            kb_id = created.id
-            module.owui_kb_id = kb_id
-            module.save(update_fields=["owui_kb_id", "updated_at"])
+        # Ensure a Knowledge Base exists for the module (locked, so parallel
+        # materials of a new module cannot create two).
+        kb_id, kb_created = ensure_module_kb(module, client)
+        if kb_created:
             _log_audit(
                 material.id,
                 module.id,
@@ -216,9 +212,14 @@ def _index_to_owui(material: Material, module: Module) -> None:
                 f"Open WebUI Knowledge Base yaratildi: {kb_id}",
             )
 
+        # A KB nobody's agent reads is invisible to the students: wire the
+        # module agent and the master agent up before the first file lands.
+        if kb_created or not module.owui_model_id:
+            _sync_agents(material, module, client)
+
         # Re-indexing: drop the previous copy before uploading a new one.
+        # Deleting the file also unlinks it from whichever KB held it.
         if material.owui_file_id:
-            client.remove_file_from_knowledge_base(kb_id, material.owui_file_id)
             client.delete_file(material.owui_file_id)
             material.owui_file_id = None
 
@@ -269,6 +270,29 @@ def _index_to_owui(material: Material, module: Module) -> None:
             LogLevel.WARN,
             f"OWUI indekslash tugallanmadi: {message}",
         )
+
+
+def _sync_agents(material: Material, module: Module, client) -> None:
+    """Agent wiring is best effort: the file is still worth indexing without it,
+    and the admin's "sync" button can retry."""
+    try:
+        model_id, created = sync_module_agent(module, client)
+        master_id = sync_master_agent(client)
+    except OwuiError as exc:
+        _log_audit(
+            material.id,
+            module.id,
+            "agent_sync",
+            LogLevel.WARN,
+            f"Agentlarni sinxronlab bo'lmadi: {exc}",
+        )
+        return
+
+    verb = "yaratildi" if created else "yangilandi"
+    message = f"Modul agenti {verb}: {model_id}"
+    if master_id:
+        message += f"; umumiy agent yangilandi: {master_id}"
+    _log_audit(material.id, module.id, "agent_sync", LogLevel.INFO, message)
 
 
 def _set_status(material: Material, status: str, error_message: str | None = ...) -> None:

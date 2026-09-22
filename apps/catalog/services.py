@@ -20,6 +20,7 @@ from apps.common.filename import (
     sanitize_path_segment,
 )
 from apps.owui.client import OwuiError, get_owui_client
+from apps.owui.sync import sync_module
 from apps.pipeline import runner
 from config.app_config import uploads_config
 
@@ -162,25 +163,10 @@ def retry_material(material: Material) -> Material:
 
 
 def delete_material(material: Material) -> dict[str, Any]:
-    """Remove the record, its files on disk, and its copy in Open WebUI."""
+    """Remove the record. Its files on disk and its copy in Open WebUI are
+    cleaned up by `apps.catalog.signals` once the delete commits."""
     filename = material.original_filename
-    kb_id = material.topic.module.owui_kb_id
-
-    if material.owui_file_id and kb_id:
-        client = get_owui_client()
-        client.remove_file_from_knowledge_base(kb_id, material.owui_file_id)
-        client.delete_file(material.owui_file_id)
-
-    for path in (material.raw_file_path, material.md_file_path):
-        if not path:
-            continue
-        try:
-            Path(path).unlink(missing_ok=True)
-        except OSError as exc:
-            logger.warning("Faylni o'chirib bo'lmadi (%s): %s", path, exc)
-
     material.delete()
-
     return {"success": True, "message": f'Material "{filename}" o\'chirildi'}
 
 
@@ -190,7 +176,8 @@ def delete_material(material: Material) -> dict[str, Any]:
 
 
 def create_or_sync_kb(module: Module) -> dict[str, Any]:
-    """Create the module's Open WebUI Knowledge Base, or adopt the existing one."""
+    """Create or adopt the module's KB, then point its agent and the master
+    agent at it."""
     client = get_owui_client()
 
     status = client.check_connection()
@@ -199,12 +186,7 @@ def create_or_sync_kb(module: Module) -> dict[str, Any]:
 
     if module.owui_kb_id:
         try:
-            existing = client.get_knowledge_base(module.owui_kb_id)
-            return {
-                "module": module,
-                "kb": {"id": existing.id, "name": existing.name},
-                "created": False,
-            }
+            client.get_knowledge_base(module.owui_kb_id)
         except OwuiError:
             # The stored id no longer resolves in Open WebUI; create a new KB.
             logger.info(
@@ -212,17 +194,23 @@ def create_or_sync_kb(module: Module) -> dict[str, Any]:
                 module.code,
                 module.owui_kb_id,
             )
+            module.owui_kb_id = None
+            module.save(update_fields=["owui_kb_id", "updated_at"])
 
-    created = client.create_knowledge_base(
-        f"{module.code} - {module.name}", module.description or module.name
-    )
-    module.owui_kb_id = created.id
-    module.save(update_fields=["owui_kb_id", "updated_at"])
+    try:
+        report = sync_module(module, client)
+        kb = client.get_knowledge_base(report.kb_id)
+    except OwuiError as exc:
+        raise BadGateway(f"Open WebUI bilan sinxronlab bo'lmadi: {exc}") from exc
 
     return {
         "module": module,
-        "kb": {"id": created.id, "name": created.name},
-        "created": True,
+        "kb": {"id": kb.id, "name": kb.name},
+        "created": report.kb_created,
+        "agentId": report.agent_id,
+        "agentCreated": report.agent_created,
+        "masterAgentId": report.master_id,
+        "summary": report.summary(),
     }
 
 

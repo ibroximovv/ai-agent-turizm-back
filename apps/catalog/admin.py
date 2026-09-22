@@ -17,9 +17,10 @@ from unfold.admin import ModelAdmin, TabularInline
 from unfold.decorators import action, display
 
 from apps.catalog import services
-from apps.catalog.forms import MaterialUploadForm
+from apps.catalog.forms import MaterialUploadForm, ModuleAdminForm
 from apps.catalog.models import AuditLog, LogLevel, Material, MaterialStatus, Module, Topic
-from apps.owui.client import OwuiError
+from apps.owui import sync as owui_sync
+from apps.owui.client import OwuiError, get_owui_client
 from apps.pipeline import runner
 from apps.pipeline import service as pipeline_service
 from config.app_config import uploads_config
@@ -79,9 +80,10 @@ class MaterialInline(TabularInline):
 
 @admin.register(Module)
 class ModuleAdmin(ModelAdmin):
+    form = ModuleAdminForm
     list_display = [
         "code_display", "topics_count", "materials_count",
-        "kb_state", "is_active", "order_index",
+        "kb_state", "agent_state", "is_active", "order_index",
     ]
     list_display_links = ["code_display"]
     list_editable = ["is_active", "order_index"]
@@ -91,21 +93,24 @@ class ModuleAdmin(ModelAdmin):
     ordering = ["order_index", "code"]
     inlines = [TopicInline]
     actions = ["action_sync_kb", "action_process_all"]
+    actions_list = ["list_sync_master"]
     actions_row = ["row_sync_kb", "row_process_all"]
     actions_detail = ["row_sync_kb", "row_process_all"]
     compressed_fields = True
     warn_unsaved_form = True
-    readonly_fields = ["id", "owui_kb_id", "created_at", "updated_at"]
+    readonly_fields = ["id", "created_at", "updated_at"]
     fieldsets = [
         (None, {"fields": ["code", "name", "description"]}),
         ("Ko'rsatish", {"fields": ["order_index", "is_active"]}),
         (
             "Open WebUI",
             {
-                "fields": ["owui_kb_id"],
+                "fields": ["owui_kb_id", "owui_model_id"],
                 "description": (
-                    "Knowledge Base yuqoridagi tugma orqali yaratiladi yoki "
-                    "birinchi material indekslanganda avtomatik paydo bo'ladi."
+                    "Har bir modulning o'z Knowledge Base'i va faqat shu bazadan "
+                    "javob beradigan agenti bor. Saqlanganda ikkalasi (bo'sh "
+                    "bo'lsa — yaratilib) Open WebUI bilan sinxronlanadi va "
+                    "umumiy agentning bilim bazalari ro'yxati yangilanadi."
                 ),
             },
         ),
@@ -139,9 +144,48 @@ class ModuleAdmin(ModelAdmin):
     def kb_state(self, obj: Module) -> tuple[bool, str]:
         return (True, obj.owui_kb_id[:14]) if obj.owui_kb_id else (False, "yo'q")
 
+    @display(description="Agent", label={True: "success", False: ""})
+    def agent_state(self, obj: Module) -> tuple[bool, str]:
+        return (True, obj.owui_model_id) if obj.owui_model_id else (False, "yo'q")
+
+    # -- saving ------------------------------------------------------------
+
+    def save_model(self, request, obj: Module, form, change) -> None:
+        synced_fields = {"owui_kb_id", "owui_model_id", "name", "is_active"}
+        kb_changed = change and "owui_kb_id" in form.changed_data
+        super().save_model(request, obj, form, change)
+
+        if change and not synced_fields.intersection(form.changed_data):
+            return
+        if not get_owui_client().is_configured:
+            return
+
+        try:
+            report = owui_sync.sync_module(obj)
+        except OwuiError as exc:
+            self.message_user(
+                request,
+                f"{obj.code}: Open WebUI bilan sinxronlanmadi — {exc}. "
+                "Keyinroq \"Open WebUI sinxronlash\" tugmasini bosing.",
+                messages.WARNING,
+            )
+            return
+        self.message_user(request, f"{obj.code}: {report.summary()}", messages.SUCCESS)
+
+        # Materials indexed into the previous KB have to be re-indexed into
+        # the new one, or the module agent would not see them.
+        if kb_changed and Material.objects.filter(topic__module=obj).exists():
+            result = pipeline_service.queue_module_materials(obj)
+            self.message_user(
+                request,
+                f"{obj.code}: KB o'zgargani uchun {result['totalQueued']} ta material "
+                "yangi bazaga qayta indekslash navbatiga qo'yildi.",
+                messages.INFO,
+            )
+
     # -- row / detail buttons ---------------------------------------------
 
-    @action(description="KB sinxronlash", icon="cloud_sync", url_path="sync-kb")
+    @action(description="Open WebUI sinxronlash", icon="cloud_sync", url_path="sync-kb")
     def row_sync_kb(self, request, object_id):
         module = self.get_object(request, object_id)
         try:
@@ -149,11 +193,31 @@ class ModuleAdmin(ModelAdmin):
         except (APIException, OwuiError) as exc:
             _error(self, request, exc)
         else:
-            verb = "yaratildi" if result["created"] else "mavjud edi"
-            self.message_user(
-                request, f'{module.code}: KB {verb} ({result["kb"]["id"]})', messages.SUCCESS
-            )
+            self.message_user(request, f'{module.code}: {result["summary"]}', messages.SUCCESS)
         return HttpResponseRedirect(request.META.get("HTTP_REFERER") or _module_list())
+
+    @action(description="Umumiy agentni yangilash", icon="hub", url_path="sync-master")
+    def list_sync_master(self, request):
+        client = get_owui_client()
+        if not client.is_configured:
+            self.message_user(request, "OWUI_API_KEY sozlanmagan", messages.ERROR)
+        else:
+            try:
+                master_id = owui_sync.sync_master_agent(client)
+            except OwuiError as exc:
+                _error(self, request, exc)
+            else:
+                if master_id:
+                    self.message_user(
+                        request, f"Umumiy agent yangilandi ({master_id})", messages.SUCCESS
+                    )
+                else:
+                    self.message_user(
+                        request,
+                        "Hali birorta modulning bilim bazasi yo'q — umumiy agent yaratilmadi.",
+                        messages.WARNING,
+                    )
+        return HttpResponseRedirect(_module_list())
 
     @action(description="Barchasini qayta ishlash", icon="refresh", url_path="process-all")
     def row_process_all(self, request, object_id):
@@ -169,7 +233,7 @@ class ModuleAdmin(ModelAdmin):
 
     # -- bulk actions ------------------------------------------------------
 
-    @admin.action(description="Open WebUI Knowledge Base yaratish / sinxronlash")
+    @admin.action(description="Open WebUI: Knowledge Base va agentlarni sinxronlash")
     def action_sync_kb(self, request, queryset):
         for module in queryset:
             try:
@@ -177,10 +241,7 @@ class ModuleAdmin(ModelAdmin):
             except (APIException, OwuiError) as exc:
                 self.message_user(request, f"{module.code}: {exc}", messages.ERROR)
                 continue
-            verb = "yaratildi" if result["created"] else "mavjud edi"
-            self.message_user(
-                request, f'{module.code}: KB {verb} ({result["kb"]["id"]})', messages.SUCCESS
-            )
+            self.message_user(request, f'{module.code}: {result["summary"]}', messages.SUCCESS)
 
     @admin.action(description="Barcha materiallarni qayta ishlash")
     def action_process_all(self, request, queryset):
