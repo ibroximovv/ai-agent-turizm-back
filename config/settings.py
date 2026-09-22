@@ -401,6 +401,30 @@ LOGGING = {
 if not DEBUG:
     SECURE_CONTENT_TYPE_NOSNIFF = True
     SESSION_COOKIE_HTTPONLY = True
+    # The admin's JS reads this one to send X-CSRFToken with the uploader's XHR.
     CSRF_COOKIE_HTTPONLY = False
     X_FRAME_OPTIONS = "DENY"
+    # nginx terminates TLS; without this header Django sees plain "http" and
+    # the admin's CSRF origin check rejects every form post.
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+    # Cookies go over HTTPS only. Set these to false in .env for an internal
+    # deployment that genuinely has no TLS — otherwise nobody can log in.
+    SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=True)
+    CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=True)
+    SESSION_COOKIE_SAMESITE = "Lax"
+    CSRF_COOKIE_SAMESITE = "Lax"
+
+    # nginx + certbot already redirect http → https, so this stays off by
+    # default; turning it on as well would only add a second hop.
+    SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=False)
+
+    # HSTS is opt-in on purpose: once a browser has seen the header it refuses
+    # plain HTTP for that long, which is painful to undo if the certificate
+    # lapses. Enable it (e.g. 2592000 = 30 days) after HTTPS is proven stable.
+    SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0)
+    if SECURE_HSTS_SECONDS:
+        SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool(
+            "SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False
+        )
+        SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)

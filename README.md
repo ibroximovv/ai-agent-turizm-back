@@ -259,13 +259,36 @@ python manage.py spectacular --file schema.yml
 
 ## Ishlab chiqarishga chiqarish
 
+### Server (nginx + PM2)
+
+To'liq tartib — [**DEPLOY.md**](DEPLOY.md) da. Qisqacha:
+
+```bash
+uv sync --no-dev
+.venv/bin/python manage.py migrate          # eski baza uchun: adopt_legacy_schema
+.venv/bin/python manage.py collectstatic --noinput
+pm2 start deploy/ecosystem.config.js && pm2 save
+sudo cp deploy/nginx/admin-ai.ocomarket.uz.conf /etc/nginx/sites-available/ && sudo nginx -t
+sudo certbot --nginx -d admin-ai.ocomarket.uz
+```
+
+Keyingi yangilanishlar uchun bitta buyruq:
+
+```bash
+./deploy/deploy.sh
+```
+
+### Docker
+
 ```bash
 export DJANGO_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(50))")
 docker compose up -d --build
 ```
 
 Konteyner ichida migratsiyalar avtomatik bajariladi va statik fayllar image
-qurilishida yig'iladi. Gunicorn bitta worker + bir nechta thread bilan ishlaydi:
-ingestion navbati jarayon ichida saqlanadi, ikkinchi worker uni ikki marta
-ishga tushirib yuborgan bo'lardi. Gorizontal masshtablash kerak bo'lsa,
-pipeline'ni Celery/RQ ga ko'chiring.
+qurilishida yig'iladi.
+
+> Ikkala holatda ham gunicorn **bitta worker** + bir nechta thread bilan
+> ishlaydi: ingestion navbati jarayon ichida saqlanadi, ikkinchi worker bir
+> materialni ikki marta ishlab yuborgan bo'lardi. Gorizontal masshtablash
+> kerak bo'lsa, pipeline'ni avval Celery/RQ ga ko'chiring.
