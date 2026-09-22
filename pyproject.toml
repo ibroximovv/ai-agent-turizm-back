@@ -17,7 +17,7 @@ dependencies = [
     "django-unfold>=0.107",
     # Pipeline
     "httpx>=0.28",
-    "pypdf>=5.1",
+    "pypdf[crypto]>=5.1",
     "python-pptx>=1.0",
     "mammoth>=1.9",
     "regex>=2024.11",

@@ -84,3 +84,47 @@ class TestPptxFiles:
         parsed = parse_file(deck)
         assert parsed.chunks == []
         assert "Taqdimotda slaydlar topilmadi." in parsed.warnings
+
+
+class TestPdf:
+    @staticmethod
+    def _build_pdf(path: Path, text: str) -> Path:
+        """A one-page PDF with a real text layer, written by hand."""
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]
+        body, offsets = b"%PDF-1.4\n", []
+        for number, obj in enumerate(objects, 1):
+            offsets.append(len(body))
+            body += b"%d 0 obj\n" % number + obj + b"\nendobj\n"
+        xref = len(body)
+        body += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+        body += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+        body += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+            len(objects) + 1,
+            xref,
+        )
+        path.write_bytes(body)
+        return path
+
+    def test_reads_an_aes_encrypted_pdf_with_an_empty_user_password(self, tmp_path: Path):
+        # Publishers often "protect" PDFs with AES and no open password;
+        # reading them needs pypdf's crypto extra.
+        from pypdf import PdfReader, PdfWriter
+
+        plain = self._build_pdf(tmp_path / "plain.pdf", "Ekoturizm barqaror rivojlanish")
+        writer = PdfWriter(clone_from=PdfReader(plain))
+        writer.encrypt(user_password="", owner_password="owner", algorithm="AES-256")
+        encrypted = tmp_path / "encrypted.pdf"
+        with encrypted.open("wb") as handle:
+            writer.write(handle)
+
+        parsed = parse_file(str(encrypted))
+
+        assert "Ekoturizm barqaror rivojlanish" in " ".join(c.text for c in parsed.chunks)

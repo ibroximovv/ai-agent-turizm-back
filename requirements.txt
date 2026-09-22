@@ -2,7 +2,9 @@ anyio==4.15.1
 asgiref==3.12.1
 attrs==26.1.0
 certifi==2026.7.22
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
 cobble==0.1.4
+cryptography==50.0.1
 django==5.2.17
 django-cors-headers==4.9.0
 django-environ==0.14.0
@@ -23,6 +25,7 @@ mammoth==1.12.2
 pillow==12.3.0
 psycopg==3.3.6
 psycopg-binary==3.3.6 ; implementation_name != 'pypy'
+pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
 pyjwt==2.14.0
 pypdf==6.19.0
 python-pptx==1.0.2
