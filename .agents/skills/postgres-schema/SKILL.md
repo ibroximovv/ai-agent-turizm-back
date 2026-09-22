@@ -2,7 +2,7 @@
 name: postgres-schema
 description: >-
   Guide for managing PostgreSQL database schemas, entity relationships,
-  migrations, and indexing in Bun + NestJS using standard English conventions.
+  migrations, and indexing in Django + PostgreSQL using standard English conventions.
 ---
 
 # PostgreSQL Database Management Skill
@@ -36,15 +36,22 @@ Module (1) ───< (N) Topic (1) ───< (N) Material (1) ───< (N) A
 
 ## 3. Safe Transactions & Status Changes
 When processing a material file:
-```typescript
-// Inside a database transaction / service method:
-// 1. Update materials.status (e.g. 'converting' -> 'md_ready' -> 'indexed')
-// 2. Insert record into audit_logs
-// 3. On error: update materials.status = 'failed', materials.error_message = err.message
+```python
+# Inside apps/pipeline/service.py:
+# 1. Update materials.status (e.g. 'converting' -> 'md_ready' -> 'indexed')
+#    with save(update_fields=[...]) so a concurrent run is not clobbered.
+# 2. Insert a row into audit_logs for each milestone.
+# 3. On error: status = 'failed', error_message = str(exc), audit level='error'.
 ```
 
 ---
 
 ## 4. Migrations & Schema Sync
-- Always maintain migration scripts under `src/database/migrations/`.
-- Ensure custom PostgreSQL ENUM types (`material_type`, `material_status`, `log_level`) are defined before dependent tables.
+- Migrations live under `apps/<app>/migrations/` and are generated with
+  `python manage.py makemigrations`. Never hand-edit an applied migration.
+- `python manage.py makemigrations --check --dry-run` must report no drift.
+- Choice columns (`materials.type`, `materials.status`, `audit_logs.level`) are
+  plain `varchar` with Django `TextChoices` — **not** native PostgreSQL enums.
+  A database inherited from the TypeORM service is converted by
+  `python manage.py adopt_legacy_schema --apply`, after which the tables are
+  adopted with `migrate --fake-initial`.

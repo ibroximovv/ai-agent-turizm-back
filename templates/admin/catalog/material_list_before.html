@@ -1,0 +1,53 @@
+{% comment %}
+Refresh the changelist while materials are still being converted, so an operator
+watching the list does not have to reload the page. Rendered above the table via
+`MaterialAdmin.list_before_template`, which is an {% include %} — so the
+changelist's own `cl` is in scope and the in-flight ids come straight from the
+server instead of being guessed from the rendered row text.
+{% endcomment %}
+
+{% spaceless %}
+<div id="material-live"
+     data-url="{% url 'admin:catalog_material_statuses' %}"
+     data-ids="{% for obj in cl.result_list %}{% if obj.is_in_progress %}{{ obj.pk }},{% endif %}{% endfor %}"
+     hidden></div>
+{% endspaceless %}
+
+{% if cl.result_list %}
+<script>
+(function () {
+  "use strict";
+
+  document.addEventListener("DOMContentLoaded", function () {
+    const root = document.getElementById("material-live");
+    if (!root) return;
+
+    const ids = root.dataset.ids.split(",").filter(Boolean);
+    if (ids.length === 0) return;
+
+    const url = root.dataset.url;
+    const BUSY = ["queued", "converting", "uploading"];
+
+    function tick() {
+      fetch(url + "?ids=" + ids.join(","), { credentials: "same-origin" })
+        .then(function (response) { return response.json(); })
+        .then(function (payload) {
+          const stillBusy = payload.items.filter(function (item) {
+            return BUSY.includes(item.status);
+          });
+          // Something settled — reloading is the simplest way to repaint the
+          // rows with the server's own markup.
+          if (stillBusy.length < ids.length) {
+            window.location.reload();
+          } else {
+            setTimeout(tick, 4000);
+          }
+        })
+        .catch(function () { /* the list still works without live updates */ });
+    }
+
+    setTimeout(tick, 4000);
+  });
+})();
+</script>
+{% endif %}

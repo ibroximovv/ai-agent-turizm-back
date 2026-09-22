@@ -17,7 +17,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Optional app container for containerized runs
   app:
     build:
       context: .
@@ -28,22 +27,32 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      NODE_ENV: production
-      PORT: 3000
-      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
-      UPLOADS_DIR: /app/uploads
+      APP_ENV: production
+      DJANGO_DEBUG: "false"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY majburiy}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-turizm_db}
-      # No migrations exist yet, so the schema is created from the entities.
-      POSTGRES_SYNC: ${POSTGRES_SYNC:-true}
+      UPLOADS_DIR: /app/uploads
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
+      API_REQUIRE_AUTH: ${API_REQUIRE_AUTH:-true}
+      PIPELINE_CONCURRENCY: ${PIPELINE_CONCURRENCY:-2}
       OWUI_URL: ${OWUI_URL:-http://localhost:8080}
       OWUI_API_KEY: ${OWUI_API_KEY:-}
-      OWUI_KB_ID: ${OWUI_KB_ID:-}
+      OWUI_TIMEOUT_MS: ${OWUI_TIMEOUT_MS:-30000}
+    # Migrations run at boot so a fresh deploy needs no extra step. On a
+    # database inherited from the TypeORM service, run `adopt_legacy_schema`
+    # first and swap this for `migrate --fake-initial` (see README).
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             gunicorn config.wsgi:application --bind 0.0.0.0:8000
+             --workers 1 --threads 8 --timeout 120 --access-logfile -"
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-3005}:8000"
     volumes:
       - app_uploads:/app/uploads
 

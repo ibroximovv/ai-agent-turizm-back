@@ -1,0 +1,146 @@
+{% extends "admin/index.html" %}
+{% load unfold %}
+
+{% block content %}
+<div class="flex flex-col gap-6">
+
+  {# ---------------------------------------------------------------- KPIs #}
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    {% for kpi in kpis %}
+      {% component "unfold/components/card.html" with href=kpi.url class="group" %}
+        <div class="flex flex-row items-start gap-4">
+          <div class="flex items-center justify-center rounded-default bg-primary-50 text-primary-600 size-11 shrink-0 dark:bg-primary-500/15 dark:text-primary-400">
+            <span class="material-symbols-outlined">{{ kpi.icon }}</span>
+          </div>
+          <div class="flex flex-col">
+            <span class="text-font-subtle-light text-xs uppercase tracking-wide dark:text-font-subtle-dark">{{ kpi.title }}</span>
+            <span class="font-semibold text-2xl text-font-important-light dark:text-font-important-dark">{{ kpi.value }}</span>
+            <span class="text-font-subtle-light text-xs dark:text-font-subtle-dark">{{ kpi.footer }}</span>
+          </div>
+        </div>
+      {% endcomponent %}
+    {% endfor %}
+  </div>
+
+  {# ------------------------------------------------- quick actions strip #}
+  <div class="flex flex-wrap gap-2">
+    <a href="{{ upload_url }}" class="bg-primary-600 flex items-center gap-2 font-medium px-3 py-2 rounded-default text-white text-sm transition-all hover:bg-primary-700">
+      <span class="material-symbols-outlined text-[18px]">upload_file</span>
+      Hujjat yuklash
+    </a>
+    <a href="{{ tree_url }}" class="border border-base-200 flex items-center gap-2 font-medium px-3 py-2 rounded-default text-sm transition-all hover:bg-base-50 dark:border-base-700 dark:hover:bg-base-800">
+      <span class="material-symbols-outlined text-[18px]">account_tree</span>
+      Kontent daraxti
+    </a>
+    <a href="/api/docs" target="_blank" class="border border-base-200 flex items-center gap-2 font-medium px-3 py-2 rounded-default text-sm transition-all hover:bg-base-50 dark:border-base-700 dark:hover:bg-base-800">
+      <span class="material-symbols-outlined text-[18px]">api</span>
+      API hujjatlari
+    </a>
+    {% if failed_count %}
+      <a href="{% url 'admin:catalog_material_changelist' %}?status__exact=failed" class="bg-red-50 border border-red-200 flex items-center gap-2 font-medium ml-auto px-3 py-2 rounded-default text-red-700 text-sm transition-all hover:bg-red-100 dark:bg-red-500/10 dark:border-red-500/30 dark:text-red-400">
+        <span class="material-symbols-outlined text-[18px]">error</span>
+        {{ failed_count }} ta material xatolik bilan tugadi
+      </a>
+    {% endif %}
+  </div>
+
+  {# ------------------------------------------- throughput + status split #}
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="lg:col-span-2">
+      {% component "unfold/components/card.html" with title="Oxirgi 2 hafta" description="Kuniga yuklangan materiallar" title_icon="analytics" %}
+        <div class="h-64">
+          {% component "unfold/components/chart/bar.html" with data=throughput_chart responsive=1 %}{% endcomponent %}
+        </div>
+      {% endcomponent %}
+    </div>
+
+    {% component "unfold/components/card.html" with title="Pipeline holati" title_icon="donut_large" %}
+      {% if status_breakdown %}
+        <div class="flex flex-col gap-4">
+          {% for row in status_breakdown %}
+            <a href="{{ row.url }}" class="flex flex-col gap-1.5 group">
+              <div class="flex flex-row items-center text-sm">
+                <span class="text-font-default-light group-hover:text-primary-600 dark:text-font-default-dark">{{ row.title }}</span>
+                <span class="font-semibold ml-auto text-font-important-light dark:text-font-important-dark">{{ row.count }}</span>
+                <span class="ml-2 text-font-subtle-light text-xs dark:text-font-subtle-dark">{{ row.percent }}%</span>
+              </div>
+              <div class="bg-base-100 h-1.5 overflow-hidden rounded-default dark:bg-base-800">
+                <div class="h-full rounded-default {{ row.bar_class }}" style="width: {{ row.percent }}%"></div>
+              </div>
+            </a>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="text-font-subtle-light text-sm dark:text-font-subtle-dark">
+          Hali material yuklanmagan. <a href="{{ upload_url }}" class="text-primary-600 underline">Birinchisini yuklang</a>.
+        </p>
+      {% endif %}
+    {% endcomponent %}
+  </div>
+
+  {# ---------------------------------------------------- modules progress #}
+  {% if module_rows %}
+    {% component "unfold/components/card.html" with title="Modullar bo'yicha indekslash" title_icon="folder_special" %}
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-base-200 text-font-subtle-light text-left text-xs uppercase dark:border-base-800 dark:text-font-subtle-dark">
+              <th class="font-medium pb-2 pr-4">Modul</th>
+              <th class="font-medium pb-2 pr-4 text-right">Materiallar</th>
+              <th class="font-medium pb-2 pr-4 text-right">Indekslangan</th>
+              <th class="font-medium pb-2 pr-4 text-right">Xatolik</th>
+              <th class="font-medium pb-2 w-40">Jarayon</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in module_rows %}
+              <tr class="border-b border-base-100 last:border-0 dark:border-base-800/60">
+                <td class="py-2.5 pr-4">
+                  <a href="{{ row.url }}" class="font-medium text-font-important-light hover:text-primary-600 dark:text-font-important-dark">
+                    {{ row.module.code }}
+                  </a>
+                  <div class="text-font-subtle-light text-xs dark:text-font-subtle-dark">{{ row.module.name|truncatechars:52 }}</div>
+                </td>
+                <td class="py-2.5 pr-4 text-right">
+                  <a href="{{ row.materials_url }}" class="hover:text-primary-600">{{ row.total }}</a>
+                </td>
+                <td class="py-2.5 pr-4 text-right text-green-600 dark:text-green-400">{{ row.indexed }}</td>
+                <td class="py-2.5 pr-4 text-right {% if row.failed %}text-red-600 dark:text-red-400{% else %}text-font-subtle-light dark:text-font-subtle-dark{% endif %}">{{ row.failed }}</td>
+                <td class="py-2.5">
+                  <div class="flex items-center gap-2">
+                    <div class="bg-base-100 grow h-1.5 overflow-hidden rounded-default dark:bg-base-800">
+                      <div class="bg-green-500 h-full rounded-default" style="width: {{ row.percent }}%"></div>
+                    </div>
+                    <span class="text-font-subtle-light text-xs w-8 text-right dark:text-font-subtle-dark">{{ row.percent }}%</span>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endcomponent %}
+  {% endif %}
+
+  {# --------------------------------------------------------- last errors #}
+  {% if recent_errors %}
+    {% component "unfold/components/card.html" with title="Oxirgi xatoliklar" title_icon="error" %}
+      <div class="flex flex-col divide-y divide-base-100 dark:divide-base-800/60">
+        {% for log in recent_errors %}
+          <div class="flex flex-col gap-1 py-2.5 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:gap-4">
+            <span class="shrink-0 text-font-subtle-light text-xs w-32 dark:text-font-subtle-dark">{{ log.created_at|date:"d.m.Y H:i" }}</span>
+            {% component "unfold/helpers/label.html" with variant="danger" text=log.stage size="md" %}{% endcomponent %}
+            <span class="text-font-default-light text-sm dark:text-font-default-dark">
+              {% if log.material %}
+                <a href="{% url 'admin:catalog_material_change' log.material.pk %}" class="font-medium hover:text-primary-600">{{ log.material.original_filename }}</a> —
+              {% endif %}
+              {{ log.message|truncatechars:160 }}
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endcomponent %}
+  {% endif %}
+
+</div>
+{% endblock %}

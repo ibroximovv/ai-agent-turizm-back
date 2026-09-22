@@ -1,0 +1,148 @@
+{% extends "admin/base_site.html" %}
+{% load unfold %}
+
+{% block content %}
+<nav class="flex flex-wrap gap-2 mb-4 text-font-subtle-light text-xs dark:text-font-subtle-dark">
+  <a href="{% url 'admin:index' %}" class="hover:underline">Bosh sahifa</a>
+  <span>/</span>
+  <span class="text-font-important-light dark:text-font-important-dark">Kontent daraxti</span>
+</nav>
+
+<div class="flex flex-col gap-4">
+
+  {# --------------------------------------------------------- toolbar #}
+  <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+    <form method="get" class="flex grow items-center gap-2">
+      <div class="relative grow max-w-md">
+        <span class="material-symbols-outlined absolute left-2.5 text-base-400 text-[20px] top-1/2 -translate-y-1/2">search</span>
+        <input type="search" name="q" value="{{ search }}" placeholder="Modul, mavzu yoki fayl nomi…"
+               class="bg-white border border-base-200 pl-9 pr-3 py-2 rounded-default text-sm w-full dark:bg-base-900 dark:border-base-700 focus:border-primary-500 focus:outline-none">
+      </div>
+      <button type="submit" class="bg-primary-600 font-medium px-3 py-2 rounded-default text-white text-sm transition-all hover:bg-primary-700">
+        Qidirish
+      </button>
+      {% if search %}
+        <a href="{{ request.path }}" class="text-font-subtle-light text-sm hover:underline dark:text-font-subtle-dark">Tozalash</a>
+      {% endif %}
+    </form>
+
+    <div class="flex gap-2 sm:ml-auto">
+      <a href="{{ module_add_url }}" class="border border-base-200 flex items-center gap-2 font-medium px-3 py-2 rounded-default text-sm transition-all hover:bg-base-50 dark:border-base-700 dark:hover:bg-base-800">
+        <span class="material-symbols-outlined text-[18px]">create_new_folder</span>
+        Modul
+      </a>
+      <a href="{{ upload_url }}" class="bg-primary-600 flex items-center gap-2 font-medium px-3 py-2 rounded-default text-white text-sm transition-all hover:bg-primary-700">
+        <span class="material-symbols-outlined text-[18px]">upload_file</span>
+        Hujjat yuklash
+      </a>
+    </div>
+  </div>
+
+  {# ---------------------------------------------------------- legend #}
+  <div class="flex flex-wrap gap-4 text-font-subtle-light text-xs dark:text-font-subtle-dark">
+    {% for label, dot in legend %}
+      <span class="flex items-center gap-1.5">
+        <span class="inline-block rounded-full size-2 {{ dot }}"></span>{{ label }}
+      </span>
+    {% endfor %}
+  </div>
+
+  {# ------------------------------------------------------------ tree #}
+  {% if tree %}
+    <div class="flex flex-col gap-3">
+      {% for node in tree %}
+        <details class="bg-white border border-base-200 group rounded-default shadow-xs dark:bg-base-900 dark:border-base-800" {% if search or forloop.first %}open{% endif %}>
+          <summary class="cursor-pointer flex items-center gap-3 list-none p-4">
+            <span class="material-symbols-outlined text-base-400 transition-transform group-open:rotate-90">chevron_right</span>
+
+            <div class="flex flex-col min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="font-semibold text-font-important-light dark:text-font-important-dark">{{ node.module.code }}</span>
+                {% if not node.module.is_active %}
+                  {% component "unfold/helpers/label.html" with text="nofaol" size="md" %}{% endcomponent %}
+                {% endif %}
+                {% if node.module.owui_kb_id %}
+                  {% component "unfold/helpers/label.html" with variant="success" text="KB" size="md" label_title=node.module.owui_kb_id %}{% endcomponent %}
+                {% endif %}
+              </div>
+              <span class="text-font-subtle-light text-sm truncate dark:text-font-subtle-dark">{{ node.module.name }}</span>
+            </div>
+
+            <div class="flex items-center gap-4 ml-auto shrink-0">
+              <div class="hidden items-center gap-2 sm:flex w-40">
+                <div class="bg-base-100 grow h-1.5 overflow-hidden rounded-default dark:bg-base-800">
+                  <div class="bg-green-500 h-full rounded-default" style="width: {{ node.percent }}%"></div>
+                </div>
+                <span class="text-font-subtle-light text-xs w-8 text-right dark:text-font-subtle-dark">{{ node.percent }}%</span>
+              </div>
+              <span class="text-font-subtle-light text-xs dark:text-font-subtle-dark">
+                {{ node.topics|length }} mavzu · {{ node.total }} material
+                {% if node.failed %}<span class="text-red-600 dark:text-red-400">· {{ node.failed }} xato</span>{% endif %}
+              </span>
+              <a href="{{ node.url }}" class="text-primary-600 text-sm hover:underline" onclick="event.stopPropagation()">Ochish</a>
+            </div>
+          </summary>
+
+          <div class="border-t border-base-100 flex flex-col dark:border-base-800/60">
+            {% for row in node.topics %}
+              <div class="border-b border-base-100 flex flex-col gap-2 px-4 py-3 last:border-0 sm:pl-12 dark:border-base-800/60">
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-base-400 text-[18px]">topic</span>
+                  <a href="{{ row.url }}" class="font-medium text-font-important-light text-sm hover:text-primary-600 dark:text-font-important-dark">
+                    {{ row.topic.code }}
+                  </a>
+                  <span class="text-font-subtle-light text-sm truncate dark:text-font-subtle-dark">{{ row.topic.name }}</span>
+                  <span class="ml-auto shrink-0 text-font-subtle-light text-xs dark:text-font-subtle-dark">
+                    {{ row.topic.num_indexed }}/{{ row.topic.num_materials }} indekslangan
+                  </span>
+                </div>
+
+                {% if row.materials %}
+                  <div class="flex flex-col gap-1 sm:pl-6">
+                    {% for entry in row.materials %}
+                      <a href="{{ entry.url }}" class="flex items-center gap-2 group/material py-0.5 text-sm">
+                        <span class="inline-block rounded-full shrink-0 size-2 {{ entry.dot }}"
+                              title="{{ entry.material.get_status_display }}"></span>
+                        <span class="text-font-default-light truncate group-hover/material:text-primary-600 dark:text-font-default-dark">
+                          {{ entry.material.original_filename }}
+                        </span>
+                        <span class="ml-auto shrink-0 text-font-subtle-light text-xs dark:text-font-subtle-dark">
+                          {{ entry.material.get_type_display }}
+                          {% if entry.material.chunk_count %}· {{ entry.material.chunk_count }} chunk{% endif %}
+                        </span>
+                      </a>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <p class="sm:pl-6 text-font-subtle-light text-xs dark:text-font-subtle-dark">
+                    Material yo'q —
+                    <a href="{{ upload_url }}" class="text-primary-600 hover:underline">hujjat yuklang</a>.
+                  </p>
+                {% endif %}
+              </div>
+            {% empty %}
+              <p class="px-4 py-3 sm:pl-12 text-font-subtle-light text-sm dark:text-font-subtle-dark">
+                Bu modulda hali mavzu yo'q.
+              </p>
+            {% endfor %}
+          </div>
+        </details>
+      {% endfor %}
+    </div>
+  {% else %}
+    {% component "unfold/components/card.html" %}
+      <div class="flex flex-col gap-3 items-center py-10 text-center">
+        <span class="material-symbols-outlined text-5xl text-base-300 dark:text-base-600">account_tree</span>
+        <p class="font-medium text-font-important-light dark:text-font-important-dark">
+          {% if search %}"{{ search }}" bo'yicha hech narsa topilmadi{% else %}Hali kontent yo'q{% endif %}
+        </p>
+        {% if not search %}
+          <a href="{{ module_add_url }}" class="bg-primary-600 font-medium px-3 py-2 rounded-default text-white text-sm hover:bg-primary-700">
+            Birinchi modulni yarating
+          </a>
+        {% endif %}
+      </div>
+    {% endcomponent %}
+  {% endif %}
+</div>
+{% endblock %}

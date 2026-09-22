@@ -1,0 +1,374 @@
+{% extends "admin/base_site.html" %}
+{% load i18n unfold %}
+
+{% block content %}
+<nav class="flex flex-wrap gap-2 mb-4 text-font-subtle-light text-xs dark:text-font-subtle-dark">
+  <a href="{% url 'admin:index' %}" class="hover:underline">Bosh sahifa</a>
+  <span>/</span>
+  <a href="{{ changelist_url }}" class="hover:underline">Materiallar</a>
+  <span>/</span>
+  <span class="text-font-important-light dark:text-font-important-dark">Hujjat yuklash</span>
+</nav>
+
+<div class="flex flex-col gap-6" id="uploader"
+     data-endpoint="{{ request.path }}" data-statuses="{{ statuses_url }}">
+  {% csrf_token %}
+
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+
+    {# ------------------------------------------------------- left: form #}
+    <div class="lg:col-span-2 flex flex-col gap-4">
+      {% component "unfold/components/card.html" with title="Hujjatlarni tanlang" title_icon="upload_file" %}
+        <div class="flex flex-col gap-4">
+
+          <div class="flex flex-col gap-2">
+            <label for="id_topic" class="font-medium text-font-important-light text-sm dark:text-font-important-dark">
+              Mavzu
+            </label>
+            {{ form.topic }}
+            <p class="text-font-subtle-light text-xs dark:text-font-subtle-dark">
+              Barcha fayllar shu mavzuga biriktiriladi.
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-2">
+            <label for="id_type" class="font-medium text-font-important-light text-sm dark:text-font-important-dark">
+              Turi
+            </label>
+            {{ form.type }}
+          </div>
+
+          <div id="dropzone"
+               class="border-2 border-dashed border-base-300 cursor-pointer flex flex-col gap-2 items-center justify-center px-6 py-12 rounded-default text-center transition-colors dark:border-base-700 hover:border-primary-500 hover:bg-primary-50/40 dark:hover:bg-primary-500/5">
+            <span class="material-symbols-outlined text-5xl text-base-400 dark:text-base-500">cloud_upload</span>
+            <p class="font-medium text-font-important-light dark:text-font-important-dark">
+              Fayllarni shu yerga tashlang
+            </p>
+            <p class="text-font-subtle-light text-sm dark:text-font-subtle-dark">
+              yoki bosing — bir vaqtda bir nechta fayl tanlash mumkin
+            </p>
+            <p class="text-font-subtle-light text-xs dark:text-font-subtle-dark">
+              PDF · PPTX · DOCX · TXT · MD — har biri {{ max_upload_mb }} MB gacha
+            </p>
+            <input type="file" id="file-input" class="hidden" multiple
+                   accept=".pdf,.pptx,.docx,.txt,.md">
+          </div>
+
+          <div id="queue" class="flex flex-col divide-y divide-base-100 empty:hidden dark:divide-base-800/60"></div>
+
+          <div class="flex flex-wrap gap-2" id="actions" hidden>
+            <button type="button" id="start"
+                    class="bg-primary-600 flex items-center gap-2 font-medium px-3 py-2 rounded-default text-white text-sm transition-all hover:bg-primary-700 disabled:opacity-50">
+              <span class="material-symbols-outlined text-[18px]">play_arrow</span>
+              Yuklashni boshlash
+            </button>
+            <button type="button" id="clear"
+                    class="border border-base-200 font-medium px-3 py-2 rounded-default text-sm transition-all hover:bg-base-50 dark:border-base-700 dark:hover:bg-base-800">
+              Ro'yxatni tozalash
+            </button>
+            <a href="{{ changelist_url }}"
+               class="border border-base-200 font-medium ml-auto px-3 py-2 rounded-default text-sm transition-all hover:bg-base-50 dark:border-base-700 dark:hover:bg-base-800">
+              Materiallar ro'yxati
+            </a>
+          </div>
+
+          {# Fallback for a browser without JavaScript: a plain form post. #}
+          <noscript>
+            <form method="post" enctype="multipart/form-data" class="flex flex-col gap-3">
+              {% csrf_token %}
+              {{ form.as_p }}
+              <button type="submit" class="bg-primary-600 px-3 py-2 rounded-default text-white text-sm">
+                Yuklash
+              </button>
+            </form>
+          </noscript>
+        </div>
+      {% endcomponent %}
+    </div>
+
+    {# ------------------------------------------------ right: what happens #}
+    <div class="flex flex-col gap-4">
+      {% component "unfold/components/card.html" with title="Keyin nima bo'ladi" title_icon="conveyor_belt" %}
+        <ol class="flex flex-col gap-3 text-sm">
+          <li class="flex gap-3">
+            <span class="bg-primary-50 flex items-center justify-center rounded-full shrink-0 size-6 text-primary-700 text-xs font-semibold dark:bg-primary-500/15 dark:text-primary-400">1</span>
+            <span class="text-font-default-light dark:text-font-default-dark">Matn ajratib olinadi (PDF sahifalari, PPTX slaydlari, DOCX bo'limlari).</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="bg-primary-50 flex items-center justify-center rounded-full shrink-0 size-6 text-primary-700 text-xs font-semibold dark:bg-primary-500/15 dark:text-primary-400">2</span>
+            <span class="text-font-default-light dark:text-font-default-dark">Tipografiya tozalanadi, buzilgan shrift kodlari tuzatiladi.</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="bg-primary-50 flex items-center justify-center rounded-full shrink-0 size-6 text-primary-700 text-xs font-semibold dark:bg-primary-500/15 dark:text-primary-400">3</span>
+            <span class="text-font-default-light dark:text-font-default-dark">Matn o'zbek kirilida bo'lsa lotinga o'giriladi.</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="bg-primary-50 flex items-center justify-center rounded-full shrink-0 size-6 text-primary-700 text-xs font-semibold dark:bg-primary-500/15 dark:text-primary-400">4</span>
+            <span class="text-font-default-light dark:text-font-default-dark">Har ~600 belgida <code class="bg-base-100 px-1 rounded text-xs dark:bg-base-800">[MANBA: ...]</code> markeri qo'yiladi.</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="bg-primary-50 flex items-center justify-center rounded-full shrink-0 size-6 text-primary-700 text-xs font-semibold dark:bg-primary-500/15 dark:text-primary-400">5</span>
+            <span class="text-font-default-light dark:text-font-default-dark">Natija Open WebUI bilimlar bazasiga indekslanadi.</span>
+          </li>
+        </ol>
+      {% endcomponent %}
+
+      {% component "unfold/components/card.html" with title="Eslatma" title_icon="info" %}
+        <p class="text-font-default-light text-sm dark:text-font-default-dark">
+          Bir xil fayl bitta mavzuga ikki marta yuklanmaydi — takror yuklash
+          <b>409</b> bilan rad etiladi. Faylni qayta ishlash kerak bo'lsa,
+          material sahifasidagi <b>Qayta ishlash</b> tugmasidan foydalaning.
+        </p>
+      {% endcomponent %}
+    </div>
+  </div>
+</div>
+
+<template id="row-template">
+  <div class="flex flex-col gap-1.5 py-3 first:pt-0" data-row>
+    <div class="flex items-center gap-3">
+      <span class="material-symbols-outlined text-base-400 text-[20px]" data-icon>draft</span>
+      <span class="font-medium text-font-important-light text-sm truncate dark:text-font-important-dark" data-name></span>
+      <span class="text-font-subtle-light text-xs shrink-0 dark:text-font-subtle-dark" data-size></span>
+      <span class="ml-auto shrink-0 text-xs" data-state>kutmoqda</span>
+      <button type="button" data-remove
+              class="text-base-400 hover:text-red-500 shrink-0">
+        <span class="material-symbols-outlined text-[18px]">close</span>
+      </button>
+    </div>
+    <div class="bg-base-100 h-1.5 overflow-hidden rounded-default dark:bg-base-800">
+      <div class="bg-primary-500 h-full rounded-default transition-all" style="width: 0%" data-bar></div>
+    </div>
+    <p class="text-red-600 text-xs hidden dark:text-red-400" data-error></p>
+  </div>
+</template>
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script>
+(function () {
+  "use strict";
+
+  document.addEventListener("DOMContentLoaded", function () {
+    const root = document.getElementById("uploader");
+    if (!root) return;
+
+    const endpoint = root.dataset.endpoint;
+    const statusesUrl = root.dataset.statuses;
+    const csrf = root.querySelector("[name=csrfmiddlewaretoken]").value;
+
+    const dropzone = document.getElementById("dropzone");
+    const input = document.getElementById("file-input");
+    const queue = document.getElementById("queue");
+    const actions = document.getElementById("actions");
+    const startBtn = document.getElementById("start");
+    const clearBtn = document.getElementById("clear");
+    const template = document.getElementById("row-template");
+
+    const ALLOWED = [".pdf", ".pptx", ".docx", ".txt", ".md"];
+    const MAX_BYTES = {{ max_upload_mb }} * 1024 * 1024;
+    // Uploads are sequential: the server converts each document on a bounded
+    // worker pool, so firing them all at once only queues them anyway.
+    let items = [];
+    let running = false;
+
+    function humanSize(bytes) {
+      if (bytes < 1024) return bytes + " B";
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function addFiles(fileList) {
+      for (const file of fileList) {
+        const dot = file.name.lastIndexOf(".");
+        const ext = dot === -1 ? "" : file.name.slice(dot).toLowerCase();
+        const node = template.content.firstElementChild.cloneNode(true);
+
+        node.querySelector("[data-name]").textContent = file.name;
+        node.querySelector("[data-size]").textContent = humanSize(file.size);
+
+        const item = { file: file, node: node, done: false, error: null };
+
+        if (!ALLOWED.includes(ext)) {
+          fail(item, "Qo'llab-quvvatlanmaydigan format: " + (ext || "kengaytmasiz"));
+        } else if (file.size > MAX_BYTES) {
+          fail(item, "Fayl {{ max_upload_mb }} MB chegarasidan katta");
+        }
+
+        node.querySelector("[data-remove]").addEventListener("click", function () {
+          items = items.filter(function (candidate) { return candidate !== item; });
+          node.remove();
+          syncActions();
+        });
+
+        items.push(item);
+        queue.appendChild(node);
+      }
+      syncActions();
+    }
+
+    function setState(item, text, className) {
+      const state = item.node.querySelector("[data-state]");
+      state.textContent = text;
+      state.className = "ml-auto shrink-0 text-xs " + className;
+    }
+
+    function fail(item, message) {
+      item.done = true;
+      item.error = message;
+      setState(item, "xato", "text-red-600 dark:text-red-400");
+      item.node.querySelector("[data-icon]").textContent = "error";
+      item.node.querySelector("[data-bar]").classList.replace("bg-primary-500", "bg-red-500");
+      const error = item.node.querySelector("[data-error]");
+      error.textContent = message;
+      error.classList.remove("hidden");
+    }
+
+    function syncActions() {
+      actions.hidden = items.length === 0;
+      const pending = items.some(function (item) { return !item.done; });
+      startBtn.disabled = running || !pending;
+    }
+
+    function uploadOne(item) {
+      return new Promise(function (resolve) {
+        const topic = document.getElementById("id_topic").value;
+        if (!topic) {
+          fail(item, "Avval mavzuni tanlang");
+          return resolve();
+        }
+
+        const data = new FormData();
+        data.append("topic", topic);
+        data.append("type", document.getElementById("id_type").value);
+        data.append("file", item.file);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", endpoint);
+        xhr.setRequestHeader("X-CSRFToken", csrf);
+        xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+
+        setState(item, "yuklanmoqda", "text-primary-600 dark:text-primary-400");
+
+        xhr.upload.addEventListener("progress", function (event) {
+          if (!event.lengthComputable) return;
+          const percent = Math.round((event.loaded / event.total) * 100);
+          item.node.querySelector("[data-bar]").style.width = percent + "%";
+        });
+
+        xhr.addEventListener("load", function () {
+          let payload = {};
+          try { payload = JSON.parse(xhr.responseText); } catch (e) { /* non-JSON error page */ }
+
+          if (xhr.status >= 200 && xhr.status < 300 && payload.ok) {
+            item.done = true;
+            item.materialId = payload.id;
+            item.changeUrl = payload.changeUrl;
+            item.node.querySelector("[data-bar]").style.width = "100%";
+            item.node.querySelector("[data-icon]").textContent = "check_circle";
+            item.node.querySelector("[data-icon]").classList.add("text-green-600");
+            const name = item.node.querySelector("[data-name]");
+            const link = document.createElement("a");
+            link.href = payload.changeUrl;
+            link.textContent = payload.name;
+            link.className = "hover:underline";
+            name.textContent = "";
+            name.appendChild(link);
+            setState(item, payload.label, "text-green-600 dark:text-green-400");
+          } else {
+            fail(item, payload.error || ("Server xatosi (HTTP " + xhr.status + ")"));
+          }
+          resolve();
+        });
+
+        xhr.addEventListener("error", function () {
+          fail(item, "Tarmoq xatosi");
+          resolve();
+        });
+
+        xhr.send(data);
+      });
+    }
+
+    async function start() {
+      running = true;
+      syncActions();
+      for (const item of items) {
+        if (item.done) continue;
+        await uploadOne(item);
+      }
+      running = false;
+      syncActions();
+      pollStatuses();
+    }
+
+    // After the upload finishes the conversion is still running on a worker
+    // thread, so the badges are refreshed until nothing is in flight.
+    function pollStatuses() {
+      const ids = items
+        .filter(function (item) { return item.materialId; })
+        .map(function (item) { return item.materialId; });
+      if (ids.length === 0) return;
+
+      fetch(statusesUrl + "?ids=" + ids.join(","), { credentials: "same-origin" })
+        .then(function (response) { return response.json(); })
+        .then(function (payload) {
+          let busy = false;
+          for (const row of payload.items) {
+            const item = items.find(function (candidate) { return candidate.materialId === row.id; });
+            if (!item) continue;
+
+            if (row.status === "failed") {
+              setState(item, row.label, "text-red-600 dark:text-red-400");
+              if (row.error) {
+                const error = item.node.querySelector("[data-error]");
+                error.textContent = row.error;
+                error.classList.remove("hidden");
+              }
+            } else if (row.status === "indexed") {
+              setState(item, row.label, "text-green-600 dark:text-green-400");
+            } else {
+              busy = true;
+              setState(item, row.label, "text-primary-600 dark:text-primary-400");
+            }
+          }
+          if (busy) setTimeout(pollStatuses, 2500);
+        })
+        .catch(function () { /* the page still works without live badges */ });
+    }
+
+    dropzone.addEventListener("click", function () { input.click(); });
+    input.addEventListener("change", function () {
+      addFiles(input.files);
+      input.value = "";
+    });
+
+    ["dragenter", "dragover"].forEach(function (name) {
+      dropzone.addEventListener(name, function (event) {
+        event.preventDefault();
+        dropzone.classList.add("border-primary-500", "bg-primary-50/40");
+      });
+    });
+    ["dragleave", "drop"].forEach(function (name) {
+      dropzone.addEventListener(name, function (event) {
+        event.preventDefault();
+        dropzone.classList.remove("border-primary-500", "bg-primary-50/40");
+      });
+    });
+    dropzone.addEventListener("drop", function (event) {
+      if (event.dataTransfer && event.dataTransfer.files.length) {
+        addFiles(event.dataTransfer.files);
+      }
+    });
+
+    startBtn.addEventListener("click", start);
+    clearBtn.addEventListener("click", function () {
+      items = [];
+      queue.innerHTML = "";
+      syncActions();
+    });
+  });
+})();
+</script>
+{% endblock %}
