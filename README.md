@@ -36,6 +36,10 @@ Open WebUI'dagi hamma narsa adminkadan boshqariladi:
   agent yangilanadi (`apps/catalog/signals.py`).
 - Server qayta ishga tushsa, yarim yo'lda qolgan materiallar avtomatik qayta
   navbatga qo'yiladi (`apps/pipeline/recovery.py`).
+- Embedding xizmati (Gemini) katta importda 429/503 bilan rad etsa, KB'ga
+  qo'shish bosqichi kutib qayta urinadi (`OWUI_RETRY_*`). Urinishlar tugasa
+  material `md_ready` da qoladi — modul qatoridagi **"Indekslanmaganlarni qayta
+  ishlash"** tugmasi faqat shularni navbatga qo'yadi.
 
 ---
 
@@ -152,7 +156,7 @@ rejim, Tailwind komponentlari.
 | **Dashboard** | Modul/mavzu/material hisoblagichlari, oxirgi 2 haftalik yuklash grafigi, pipeline holati kesimi, modullar bo'yicha indekslash foizi, oxirgi xatoliklar |
 | **Kontent daraxti** | Modul → mavzu → material ierarxiyasi bitta ekranda, qidiruv va holat nuqtalari bilan |
 | **Hujjat yuklash** | Drag & drop, bir vaqtda bir nechta fayl, har biri uchun progress bar, yuklangandan keyin holat avtomatik yangilanadi |
-| **Modullar** | Mavzular inline; KB va agentni Open WebUI ro'yxatidan tanlash; qator tugmalari: *Open WebUI sinxronlash*, *barchasini qayta ishlash*; ro'yxat tugmasi: *Umumiy agentni yangilash* |
+| **Modullar** | Mavzular inline; KB va agentni Open WebUI ro'yxatidan tanlash; qator tugmalari: *Open WebUI sinxronlash*, *Indekslanmaganlarni qayta ishlash* (`md_ready` / `failed`), *barchasini qayta ishlash*; ro'yxat tugmasi: *Umumiy agentni yangilash* |
 | **Mavzular** | Materiallar inline ko'rinadi |
 | **Materiallar** | Rangli holat chiplari; qator tugmalari: *Qayta ishlash*, *Markdown*. Ro'yxat konvertatsiya davom etayotganda o'zini yangilaydi. O'chirish diskdagi fayllarni va Open WebUI nusxasini ham tozalaydi |
 | **Audit yozuvlari** | Faqat o'qish uchun pipeline tarixi |
@@ -201,7 +205,7 @@ curl http://localhost:3005/api/modules -H "Authorization: Bearer <access>"
 | `GET` `POST` | `/api/modules` | Modullar ro'yxati / yaratish |
 | `GET` `PATCH` `DELETE` | `/api/modules/{id}` | Modul tafsiloti / tahrir / o'chirish |
 | `POST` | `/api/modules/{id}/kb` | Modul KB'si, modul agenti va umumiy agentni sinxronlash |
-| `POST` | `/api/modules/{id}/process-all` | Modulning barcha materiallarini qayta ishlash |
+| `POST` | `/api/modules/{id}/process-all` | Modulning barcha materiallarini qayta ishlash (`?unindexed=true` — faqat bilim bazasiga tushmaganlari) |
 | `GET` `POST` | `/api/topics` | Mavzular ro'yxati / yaratish |
 | `GET` `PATCH` `DELETE` | `/api/topics/{id}` | Mavzu tafsiloti / tahrir / o'chirish |
 | `GET` | `/api/materials` | Materiallar ro'yxati (filtrlar bilan) |
@@ -244,6 +248,7 @@ Har bir yo'l oxirgi `/` bilan ham, usiz ham ishlaydi.
 | `OWUI_AGENT_TEMPLATE_MODEL_ID` | `modul-1---gid-yordamchisi` | Sozlamalari yangi agentlarga ko'chiriladigan preset |
 | `OWUI_MASTER_MODEL_ID` / `OWUI_MASTER_MODEL_NAME` | `turizm-umumiy-agent` / `Turizm — umumiy gid yordamchisi` | Umumiy agent |
 | `OWUI_SHARE_WITH_USERS` | `true` | Agentlar va KB'larni barcha Open WebUI foydalanuvchilariga ochish |
+| `OWUI_RETRY_ATTEMPTS` / `OWUI_RETRY_BASE_SECONDS` / `OWUI_RETRY_MAX_SECONDS` | `6` / `20` / `300` | Embedding 429/503 bilan rad etilsa qayta urinish (kutish ikki baravar oshadi) |
 | `PIPELINE_RESUME_ON_START` | `true` | Restartda uzilgan materiallarni qayta navbatga qo'yish |
 | `CORS_ALLOW_ALL_ORIGINS` / `CORS_ALLOWED_ORIGINS` | `true` / — | Brauzerdan murojaat siyosati |
 | `LANGUAGE_CODE` / `TIME_ZONE` | `uz` / `Asia/Tashkent` | Lokal sozlamalar |

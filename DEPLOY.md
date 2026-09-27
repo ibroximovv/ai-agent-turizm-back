@@ -309,6 +309,13 @@ proxy_send_timeout 600s;
 client_max_body_size 200m;
 ```
 
+**Katta import va Gemini limiti.** Ko'p hujjat birdan yuklansa Gemini
+embedding 429 / 503 qaytaradi. Backend KB'ga qo'shishni kutib qayta urinadi
+(`OWUI_RETRY_*`); shunda ham tushmay qolganlari `md_ready` holatida turadi.
+Adminkada modul qatoridagi **"Indekslanmaganlarni qayta ishlash"** tugmasi
+faqat shularni qayta navbatga qo'yadi. Limitga tez-tez urilsa,
+`PIPELINE_CONCURRENCY=1` qiling.
+
 **Modul 1 ni mavjud agentga ulash.** Adminkada modul formasining "Open WebUI"
 bo'limida Knowledge Base va agentni ro'yxatdan tanlang (masalan
 `modul-1---gid-yordamchisi`). Saqlanganda agentning bilim bazasi shu KB'ga,

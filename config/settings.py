@@ -365,6 +365,9 @@ OWUI = build_owui_config(
         "OWUI_MASTER_MODEL_NAME", default="Turizm — umumiy gid yordamchisi"
     ),
     share_with_users=env.bool("OWUI_SHARE_WITH_USERS", default=True),
+    retry_attempts=env.int("OWUI_RETRY_ATTEMPTS", default=6),
+    retry_base_seconds=env.float("OWUI_RETRY_BASE_SECONDS", default=20.0),
+    retry_max_seconds=env.float("OWUI_RETRY_MAX_SECONDS", default=300.0),
 )
 # Re-queue materials a restart interrupted mid-run (see apps/pipeline/recovery.py).
 PIPELINE_RESUME_ON_START = env.bool("PIPELINE_RESUME_ON_START", default=True)

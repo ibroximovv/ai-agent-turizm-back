@@ -22,6 +22,10 @@ Pure HTTP against ``OWUI_URL`` with a Bearer ``OWUI_API_KEY``:
 from __future__ import annotations
 
 import logging
+import re
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -34,7 +38,58 @@ logger = logging.getLogger(__name__)
 
 
 class OwuiError(RuntimeError):
-    """Open WebUI rejected a call; the message carries the reason."""
+    """Open WebUI rejected a call; the message carries the reason.
+
+    `transient` marks failures worth retrying: the embedding provider behind
+    Open WebUI rate-limited (429) or was briefly unavailable (5xx).
+    """
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
+
+
+#: Open WebUI wraps the embedding provider's error in its own HTTP 400, e.g.
+#: ``400: 429, message='Too Many Requests', url='…/embeddings'``. Matched
+#: against the response detail only — never the call label, whose file and
+#: KB UUIDs could contain the same digits.
+_TRANSIENT_DETAIL = re.compile(
+    r"(?<![\w-])(?:429|502|503|504)(?![\w-])"
+    r"|too many requests|service unavailable|resource[_ ]exhausted"
+    r"|rate.?limit|temporarily unavailable|overloaded",
+    re.IGNORECASE,
+)
+_TRANSIENT_STATUS = frozenset({429, 502, 503, 504})
+
+#: While the provider is rate-limiting, every pipeline worker waits — not only
+#: the one that was refused — so the pool stops hammering it in parallel.
+_cooldown_lock = threading.Lock()
+_cooldown_until = 0.0
+
+
+def _is_transient(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code in _TRANSIENT_STATUS:
+            return True
+        try:
+            body = exc.response.json()
+            detail = body.get("detail") or body.get("message") if isinstance(body, dict) else body
+        except ValueError:
+            detail = exc.response.text[:500]
+        return bool(_TRANSIENT_DETAIL.search(str(detail or "")))
+    return False
+
+
+def _wait_for_cooldown() -> None:
+    delay = _cooldown_until - time.monotonic()
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _extend_cooldown(seconds: float) -> None:
+    global _cooldown_until
+    with _cooldown_lock:
+        _cooldown_until = max(_cooldown_until, time.monotonic() + seconds)
 
 
 @dataclass(frozen=True)
@@ -130,7 +185,39 @@ class OwuiClient:
                     return None
                 return response.json()
         except Exception as exc:
-            raise OwuiError(f"{label}: {_describe_error(exc)}") from exc
+            raise OwuiError(
+                f"{label}: {_describe_error(exc)}", transient=_is_transient(exc)
+            ) from exc
+
+    def _with_retry(
+        self,
+        call: Callable[[], Any],
+        on_retry: Callable[[int, int, float, OwuiError], None] | None = None,
+    ) -> Any:
+        """Run `call`, retrying transient failures with exponential backoff.
+
+        Anything else — and the last transient failure — is raised as is.
+        """
+        attempts = self.config.retry_attempts
+        for attempt in range(1, attempts + 1):
+            _wait_for_cooldown()
+            try:
+                return call()
+            except OwuiError as exc:
+                if not exc.transient or attempt == attempts:
+                    raise
+                delay = min(
+                    self.config.retry_base_seconds * 2 ** (attempt - 1),
+                    self.config.retry_max_seconds,
+                )
+                logger.warning(
+                    "Open WebUI vaqtincha rad etdi (%d/%d), %.0f s kutiladi: %s",
+                    attempt, attempts, delay, exc,
+                )
+                if on_retry is not None:
+                    on_retry(attempt, attempts, delay, exc)
+                _extend_cooldown(delay)
+        raise AssertionError("unreachable")
 
     @property
     def is_configured(self) -> bool:
@@ -263,13 +350,28 @@ class OwuiClient:
             id=str(data.get("id", "")), filename=str(data.get("filename", filename))
         )
 
-    def add_file_to_knowledge_base(self, kb_id: str, file_id: str) -> bool:
-        self._request(
-            f"Faylni ({file_id}) KB ({kb_id}) ga bog'lash",
-            "POST",
-            f"/api/v1/knowledge/{quote(kb_id, safe='')}/file/add",
-            json={"file_id": file_id},
-            timeout=self.config.index_timeout_seconds,
+    def add_file_to_knowledge_base(
+        self,
+        kb_id: str,
+        file_id: str,
+        on_retry: Callable[[int, int, float, OwuiError], None] | None = None,
+    ) -> bool:
+        """Link a file to a KB, which embeds it into the KB's collection.
+
+        This is the step the embedding provider rate-limits. Retrying it is
+        safe: Open WebUI embeds everything before writing, so a refused call
+        leaves nothing half-linked, and a retry rebuilds from the file's
+        stored text.
+        """
+        self._with_retry(
+            lambda: self._request(
+                f"Faylni ({file_id}) KB ({kb_id}) ga bog'lash",
+                "POST",
+                f"/api/v1/knowledge/{quote(kb_id, safe='')}/file/add",
+                json={"file_id": file_id},
+                timeout=self.config.index_timeout_seconds,
+            ),
+            on_retry,
         )
         return True
 

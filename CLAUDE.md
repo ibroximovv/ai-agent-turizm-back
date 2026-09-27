@@ -47,6 +47,12 @@ This project is the **Backend API, Admin Panel and Ingestion Pipeline** for the
      only has its knowledge list, activity and sharing rewritten.
    - Uploads use `process_in_background=false`: linking a file whose
      background extraction has not finished fails with "empty content".
+   - Linking a file to a KB is where the embedding provider rate-limits.
+     `OwuiClient.add_file_to_knowledge_base` retries transient refusals (429 /
+     5xx, detected from Open WebUI's wrapped `detail`, never from the label's
+     UUIDs) with doubling backoff and a process-wide cooldown shared by all
+     pipeline workers. Upload itself is not retried: a re-POST would create a
+     second file.
    - Deletions clean Open WebUI up through `apps/catalog/signals.py` (on
      commit), so cascades and admin inlines are covered too. Tests that assert
      on the cleanup need `django_capture_on_commit_callbacks(execute=True)`.

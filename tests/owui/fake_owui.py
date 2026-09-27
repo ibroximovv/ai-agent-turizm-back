@@ -21,6 +21,9 @@ class FakeOwui:
         self.files: dict[str, dict[str, Any]] = {}
         self.models: dict[str, dict[str, Any]] = {}
         self.requests: list[httpx.Request] = []
+        #: Queued (status, detail) answers for the next file/add calls — how
+        #: Open WebUI reports the embedding provider refusing the request.
+        self.add_failures: list[tuple[int, str]] = []
         self._ids = itertools.count(1)
 
     # -- seeding helpers ---------------------------------------------------
@@ -126,6 +129,9 @@ class FakeOwui:
             chunk = kb["files"][(page - 1) * 30 : page * 30]
             return _ok({"items": [{"id": f} for f in chunk], "total": len(kb["files"])})
         if action == "file/add":
+            if self.add_failures:
+                status, detail = self.add_failures.pop(0)
+                return httpx.Response(status, json={"detail": detail})
             file = self.files.get(body["file_id"])
             if file is None or not file["processed"]:
                 return httpx.Response(400, json={"detail": "empty content"})

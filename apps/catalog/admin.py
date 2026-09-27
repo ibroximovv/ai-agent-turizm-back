@@ -92,10 +92,10 @@ class ModuleAdmin(ModelAdmin):
     search_fields = ["code", "name", "description"]
     ordering = ["order_index", "code"]
     inlines = [TopicInline]
-    actions = ["action_sync_kb", "action_process_all"]
+    actions = ["action_sync_kb", "action_process_all", "action_process_unindexed"]
     actions_list = ["list_sync_master"]
-    actions_row = ["row_sync_kb", "row_process_all"]
-    actions_detail = ["row_sync_kb", "row_process_all"]
+    actions_row = ["row_sync_kb", "row_process_unindexed", "row_process_all"]
+    actions_detail = ["row_sync_kb", "row_process_unindexed", "row_process_all"]
     compressed_fields = True
     warn_unsaved_form = True
     readonly_fields = ["id", "created_at", "updated_at"]
@@ -231,6 +231,17 @@ class ModuleAdmin(ModelAdmin):
         )
         return HttpResponseRedirect(request.META.get("HTTP_REFERER") or _module_list())
 
+    @action(
+        description="Indekslanmaganlarni qayta ishlash",
+        icon="replay",
+        url_path="process-unindexed",
+    )
+    def row_process_unindexed(self, request, object_id):
+        module = self.get_object(request, object_id)
+        result = pipeline_service.queue_module_materials(module, only_unindexed=True)
+        self.message_user(request, _unindexed_message(module, result), messages.SUCCESS)
+        return HttpResponseRedirect(request.META.get("HTTP_REFERER") or _module_list())
+
     # -- bulk actions ------------------------------------------------------
 
     @admin.action(description="Open WebUI: Knowledge Base va agentlarni sinxronlash")
@@ -253,6 +264,22 @@ class ModuleAdmin(ModelAdmin):
                 f'({result["skipped"]} ta o\'tkazib yuborildi)',
                 messages.SUCCESS,
             )
+
+
+    @admin.action(description="Indekslanmagan materiallarni qayta ishlash")
+    def action_process_unindexed(self, request, queryset):
+        for module in queryset:
+            result = pipeline_service.queue_module_materials(module, only_unindexed=True)
+            self.message_user(request, _unindexed_message(module, result), messages.SUCCESS)
+
+
+def _unindexed_message(module: Module, result: dict) -> str:
+    if not result["totalQueued"] and not result["skipped"]:
+        return f"{module.code}: bilim bazasiga tushmagan material yo'q."
+    return (
+        f'{module.code}: bilim bazasiga tushmagan {result["totalQueued"]} ta material '
+        f'qayta navbatga qo\'yildi ({result["skipped"]} tasi hozir ishlanmoqda).'
+    )
 
 
 def _module_list() -> str:

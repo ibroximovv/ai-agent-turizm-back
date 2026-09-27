@@ -183,14 +183,28 @@ class ModuleViewSet(viewsets.ModelViewSet):
         summary="Modulning barcha materiallarini qayta ishlash",
         description=(
             "Modul ichidagi barcha materiallarni konvertatsiya, transliteratsiya, "
-            "grounding va Open WebUI indekslash uchun navbatga qo'yadi."
+            "grounding va Open WebUI indekslash uchun navbatga qo'yadi. "
+            "`unindexed=true` bilan faqat bilim bazasiga tushmaganlarini "
+            "(`md_ready`, `failed`) qayta ishlaydi."
         ),
+        parameters=[
+            OpenApiParameter(
+                "unindexed",
+                OpenApiTypes.BOOL,
+                description="Faqat indekslanmagan (md_ready / failed) materiallar",
+            )
+        ],
         request=None,
         responses={200: BatchProcessResultSerializer},
     )
     @action(detail=True, methods=["post"], url_path="process-all")
     def process_all(self, request, pk=None):
-        return Response(pipeline_service.queue_module_materials(self.get_object()))
+        only_unindexed = bool(_bool_param(request.query_params.get("unindexed")))
+        return Response(
+            pipeline_service.queue_module_materials(
+                self.get_object(), only_unindexed=only_unindexed
+            )
+        )
 
 
 @extend_schema(tags=["Topics"])

@@ -44,6 +44,12 @@ class OwuiConfig:
     master_model_name: str = "Turizm — umumiy gid yordamchisi"
     #: Grant every Open WebUI user read access to the agents and their KBs.
     share_with_users: bool = True
+    #: Linking a file to a KB embeds it; the embedding provider rate-limits
+    #: (429) or is briefly unavailable (503). How often to try, and the first
+    #: wait — each following wait doubles, capped at `retry_max_seconds`.
+    retry_attempts: int = 6
+    retry_base_seconds: float = 20.0
+    retry_max_seconds: float = 300.0
 
     @property
     def is_configured(self) -> bool:
@@ -78,6 +84,9 @@ def build_owui_config(
     master_model_id: str = "turizm-umumiy-agent",
     master_model_name: str = "Turizm — umumiy gid yordamchisi",
     share_with_users: bool = True,
+    retry_attempts: int = 6,
+    retry_base_seconds: float = 20.0,
+    retry_max_seconds: float = 300.0,
 ) -> OwuiConfig:
     """Knowledge Base ids are deliberately absent here: each module owns its
     own KB in `modules.owui_kb_id`, so there is no single global one."""
@@ -93,6 +102,9 @@ def build_owui_config(
         master_model_id=master_model_id.strip(),
         master_model_name=master_model_name.strip() or master_model_id.strip(),
         share_with_users=share_with_users,
+        retry_attempts=max(1, retry_attempts),
+        retry_base_seconds=max(0.0, retry_base_seconds),
+        retry_max_seconds=max(retry_base_seconds, retry_max_seconds),
     )
 
 

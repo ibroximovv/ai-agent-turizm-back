@@ -148,17 +148,24 @@ def process_material(material_id: str) -> Material:
         runner.release(str(material.id))
 
 
-def queue_module_materials(module: Module) -> dict:
-    """Enqueue every material of a module for a full pipeline run.
+#: Materials that finished a run without reaching the knowledge base.
+UNINDEXED_STATUSES = (MaterialStatus.MD_READY, MaterialStatus.FAILED)
+
+
+def queue_module_materials(module: Module, only_unindexed: bool = False) -> dict:
+    """Enqueue a module's materials for a full pipeline run.
+
+    With `only_unindexed`, just the ones that stopped short of the knowledge
+    base (`md_ready` after a refused indexing call, or `failed`) — the usual
+    follow-up after the embedding provider rate-limited a large import.
 
     Anything already mid-run is left alone rather than processed twice. The
     worker pool itself provides the concurrency limit.
     """
-    materials = list(
-        Material.objects.filter(topic__module=module).order_by("created_at").only(
-            "id", "original_filename"
-        )
-    )
+    queryset = Material.objects.filter(topic__module=module)
+    if only_unindexed:
+        queryset = queryset.filter(status__in=UNINDEXED_STATUSES)
+    materials = list(queryset.order_by("created_at").only("id", "original_filename"))
     queueable = [m for m in materials if not runner.is_processing(str(m.id))]
 
     if queueable:
@@ -232,7 +239,17 @@ def _index_to_owui(material: Material, module: Module) -> None:
         )
         material.owui_file_id = uploaded.id
 
-        client.add_file_to_knowledge_base(kb_id, uploaded.id)
+        def on_retry(attempt: int, attempts: int, delay: float, exc: OwuiError) -> None:
+            _log_audit(
+                material.id,
+                module.id,
+                "indexing",
+                LogLevel.WARN,
+                f"Embedding xizmati vaqtincha rad etdi ({attempt}/{attempts}), "
+                f"{delay:.0f} s dan keyin qayta uriniladi: {exc}",
+            )
+
+        client.add_file_to_knowledge_base(kb_id, uploaded.id, on_retry=on_retry)
 
         material.status = MaterialStatus.INDEXED
         material.error_message = None
