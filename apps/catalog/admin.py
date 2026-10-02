@@ -18,12 +18,20 @@ from unfold.decorators import action, display
 
 from apps.catalog import services
 from apps.catalog.forms import MaterialUploadForm, ModuleAdminForm
-from apps.catalog.models import AuditLog, LogLevel, Material, MaterialStatus, Module, Topic
+from apps.catalog.models import (
+    AuditLog,
+    ExtractionMethod,
+    LogLevel,
+    Material,
+    MaterialStatus,
+    Module,
+    Topic,
+)
 from apps.owui import sync as owui_sync
 from apps.owui.client import OwuiError, get_owui_client
 from apps.pipeline import runner
 from apps.pipeline import service as pipeline_service
-from config.app_config import uploads_config
+from config.app_config import ocr_config, uploads_config
 
 #: Unfold label variants per pipeline status.
 STATUS_VARIANTS = {
@@ -34,6 +42,15 @@ STATUS_VARIANTS = {
     MaterialStatus.UPLOADING: "info",
     MaterialStatus.INDEXED: "success",
     MaterialStatus.FAILED: "danger",
+}
+
+#: Unfold label variants for where a material's text came from. "low" marks
+#: OCR output whose confidence is under OCR_MIN_CONFIDENCE.
+EXTRACTION_VARIANTS = {
+    ExtractionMethod.TEXT: "",
+    ExtractionMethod.OCR: "info",
+    ExtractionMethod.MIXED: "info",
+    "low": "warning",
 }
 
 LEVEL_VARIANTS = {
@@ -330,32 +347,45 @@ class TopicAdmin(ModelAdmin):
 class MaterialAdmin(ModelAdmin):
     list_display = [
         "filename_display", "module_code", "topic_code", "type",
-        "status_badge", "chunk_count", "size_display", "created_at",
+        "status_badge", "extraction_badge", "chunk_count", "size_display", "created_at",
     ]
     list_display_links = ["filename_display"]
-    list_filter = ["status", "type", "topic__module", "detected_script"]
+    list_filter = ["status", "type", "topic__module", "detected_script", "extraction_method"]
     list_filter_submit = True
     search_fields = ["original_filename", "topic__code", "topic__module__code", "error_message"]
     date_hierarchy = "created_at"
     ordering = ["-created_at"]
     autocomplete_fields = ["topic"]
-    actions = ["action_retry"]
+    actions = ["action_retry", "action_force_ocr"]
     actions_list = ["list_upload"]
     actions_row = ["row_retry", "row_markdown"]
-    actions_detail = ["row_retry", "row_markdown"]
+    actions_detail = ["row_retry", "row_force_ocr", "row_cancel", "row_markdown"]
     compressed_fields = True
     list_before_template = "admin/catalog/material_list_before.html"
     readonly_fields = [
         "id", "status_badge", "raw_file_path", "md_file_path", "file_hash",
         "file_size", "chunk_count", "char_count", "detected_script",
         "owui_file_id", "indexed_at", "uploaded_by", "created_at", "updated_at",
-        "error_message",
+        "error_message", "progress_message", "extraction_method", "ocr_page_count",
+        "ocr_confidence", "ocr_languages", "force_ocr",
     ]
     fieldsets = [
-        (None, {"fields": ["topic", "type", "original_filename", "status_badge"]}),
+        (
+            None,
+            {"fields": ["topic", "type", "original_filename", "status_badge", "progress_message"]},
+        ),
         (
             "Konvertatsiya natijasi",
             {"fields": ["chunk_count", "char_count", "detected_script", "md_file_path"]},
+        ),
+        (
+            "OCR",
+            {
+                "fields": [
+                    "extraction_method", "ocr_page_count", "ocr_confidence",
+                    "ocr_languages", "force_ocr",
+                ]
+            },
         ),
         ("Open WebUI", {"fields": ["owui_file_id", "indexed_at"]}),
         ("Xatolik", {"fields": ["error_message"]}),
@@ -487,7 +517,7 @@ class MaterialAdmin(ModelAdmin):
         """Tiny JSON feed so a list page can refresh its badges without a reload."""
         ids = [value for value in request.GET.get("ids", "").split(",") if value]
         rows = Material.objects.filter(pk__in=ids[:100]).values(
-            "id", "status", "chunk_count", "error_message"
+            "id", "status", "chunk_count", "error_message", "progress_message"
         )
         return JsonResponse(
             {
@@ -498,6 +528,7 @@ class MaterialAdmin(ModelAdmin):
                         "label": MaterialStatus(row["status"]).label,
                         "chunkCount": row["chunk_count"],
                         "error": row["error_message"],
+                        "progress": row["progress_message"],
                     }
                     for row in rows
                 ]
@@ -511,7 +542,9 @@ class MaterialAdmin(ModelAdmin):
 
     @display(description="Hujjat", ordering="original_filename", header=True)
     def filename_display(self, obj: Material) -> list[str]:
-        return [obj.original_filename, obj.get_type_display()]
+        # While a long OCR runs, its progress is more useful than the type.
+        subtitle = (obj.is_in_progress and obj.progress_message) or obj.get_type_display()
+        return [obj.original_filename, subtitle]
 
     @display(description="Modul", ordering="topic__module__code")
     def module_code(self, obj: Material) -> str:
@@ -524,6 +557,20 @@ class MaterialAdmin(ModelAdmin):
     @display(description="Holati", ordering="status", label=STATUS_VARIANTS)
     def status_badge(self, obj: Material) -> tuple[str, str]:
         return obj.status, obj.get_status_display()
+
+    @display(description="Matn manbai", ordering="extraction_method", label=EXTRACTION_VARIANTS)
+    def extraction_badge(self, obj: Material) -> tuple[str, str] | str:
+        if not obj.extraction_method:
+            return "—"
+        label = obj.get_extraction_method_display()
+        if obj.extraction_method == ExtractionMethod.TEXT or obj.ocr_confidence is None:
+            return obj.extraction_method, label
+        key = (
+            "low"
+            if obj.ocr_confidence < ocr_config().min_confidence
+            else obj.extraction_method
+        )
+        return key, f"{label} · {obj.ocr_confidence:.0f}%"
 
     @display(description="Hajmi", ordering="file_size")
     def size_display(self, obj: Material) -> str:
@@ -547,6 +594,38 @@ class MaterialAdmin(ModelAdmin):
                 request,
                 f'"{material.original_filename}" navbatga qo\'yildi.',
                 messages.SUCCESS,
+            )
+        return HttpResponseRedirect(request.META.get("HTTP_REFERER") or _material_list())
+
+    @action(description="OCR bilan qayta ishlash", icon="document_scanner", url_path="force-ocr")
+    def row_force_ocr(self, request, object_id):
+        material = self.get_object(request, object_id)
+        try:
+            services.reprocess_with_ocr(material)
+        except APIException as exc:
+            _error(self, request, exc)
+        else:
+            self.message_user(
+                request,
+                f'"{material.original_filename}" barcha sahifalari OCR qilinadi — '
+                "navbatga qo'yildi.",
+                messages.SUCCESS,
+            )
+        return HttpResponseRedirect(request.META.get("HTTP_REFERER") or _material_list())
+
+    @action(description="To'xtatish", icon="stop_circle", url_path="cancel")
+    def row_cancel(self, request, object_id):
+        material = self.get_object(request, object_id)
+        try:
+            services.cancel_material(material)
+        except APIException as exc:
+            _error(self, request, exc)
+        else:
+            self.message_user(
+                request,
+                f'"{material.original_filename}" to\'xtatilmoqda — joriy sahifalar '
+                "tugagach to'xtaydi.",
+                messages.WARNING,
             )
         return HttpResponseRedirect(request.META.get("HTTP_REFERER") or _material_list())
 
@@ -576,6 +655,24 @@ class MaterialAdmin(ModelAdmin):
                 f"{skipped} ta material allaqachon ishlanmoqda — o'tkazib yuborildi.",
                 messages.WARNING,
             )
+
+    @admin.action(description="OCR bilan qayta ishlash (barcha sahifalar)")
+    def action_force_ocr(self, request, queryset):
+        started, refused = 0, []
+        for material in queryset:
+            try:
+                services.reprocess_with_ocr(material)
+            except APIException as exc:
+                refused.append(f"{material.original_filename}: {getattr(exc, 'detail', exc)}")
+            else:
+                started += 1
+
+        if started:
+            self.message_user(
+                request, f"{started} ta material OCR navbatiga qo'yildi.", messages.SUCCESS
+            )
+        for message in refused[:10]:
+            self.message_user(request, message, messages.WARNING)
 
     def delete_model(self, request, obj):
         # Keep disk files and the Open WebUI copy in step with the record.

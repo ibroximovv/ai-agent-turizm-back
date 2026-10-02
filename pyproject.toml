@@ -21,6 +21,8 @@ dependencies = [
     "python-pptx>=1.0",
     "mammoth>=1.9",
     "regex>=2024.11",
+    "pypdfium2>=5.0",
+    "pillow>=11.0",
 ]
 
 [dependency-groups]

@@ -21,11 +21,15 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DJANGO_SETTINGS_MODULE=config.settings \
+    MALLOC_ARENA_MAX=2 \
     PATH="/opt/venv/bin:$PATH"
 
-# libpq is needed by psycopg; curl backs the healthcheck.
+# libpq is needed by psycopg; curl backs the healthcheck; tesseract reads
+# scanned PDF pages (Uzbek Latin + Cyrillic, Russian, English).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq5 curl \
+       tesseract-ocr tesseract-ocr-uzb tesseract-ocr-uzb-cyrl \
+       tesseract-ocr-rus tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash app
 

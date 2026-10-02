@@ -35,17 +35,28 @@ def _unlink(path: str | None) -> None:
 
 @receiver(post_delete, sender=Material, dispatch_uid="catalog.material_cleanup")
 def cleanup_material(sender, instance: Material, **kwargs) -> None:
-    raw_path, md_path, file_id = (
+    material_id, raw_path, md_path, file_id, file_hash = (
+        str(instance.pk),
         instance.raw_file_path,
         instance.md_file_path,
         instance.owui_file_id,
+        instance.file_hash,
     )
 
     def run() -> None:
         from apps.owui.sync import purge_files
+        from apps.pipeline import runner
+        from apps.pipeline.ocr.cache import remove_cache
+        from config.app_config import uploads_config
 
+        # A book being OCR'd would otherwise keep a worker busy for minutes
+        # on a file that no longer exists.
+        runner.cancel(material_id)
         _unlink(raw_path)
         _unlink(md_path)
+        # The OCR cache is keyed by content, which another topic may share.
+        if file_hash and not Material.objects.filter(file_hash=file_hash).exists():
+            remove_cache(uploads_config().ocr_cache_dir, file_hash)
         if file_id:
             purge_files([file_id])
 

@@ -73,6 +73,29 @@ qoladi. Yo'l-yo'lakay ikkita keng tarqalgan font nuqsoni tuzatiladi:
 | So'z oxiridagi buzilgan digraf | `-ии` | `-ий` |
 | Bosh harfli sarlavhada kichik digraf dumi | `TO‘RTINChI` | `TO‘RTINCHI` |
 
+### 3. Skanerlangan PDF'lar (OCR)
+
+Skaner qilingan PDF'da matn yo'q — har sahifa bitta rasm. Pipeline har sahifani
+tekshiradi: matn qatlami bo'sh, juda kam yoki buzuq bo'lib, sahifada rasm bo'lsa,
+sahifa PDFium bilan 300 DPI rasmga aylantiriladi va **Tesseract** bilan o'qiladi
+(`uzb`, `uzb_cyrl`, `rus`). Matnli sahifalar avvalgidek o'qiladi, shuning uchun
+aralash PDF'da faqat skan sahifalar OCR qilinadi.
+
+- Dastlabki sahifalardan yozuv aniqlanadi va qolganlari bitta til bilan o'qiladi.
+- Kolontitullar, sahifa raqamlari va kirill so'z ichidagi lotin harflar
+  (`Тoшкeнт` → `Тошкент`) tozalanadi, keyin matn odatdagi tozalash va
+  transliteratsiyadan o'tadi.
+- Skan hujjatlar **alohida navbatda** ishlanadi (`OCR_CONCURRENCY`) — oddiy
+  hujjatlar 500 sahifalik kitob ortida kutmaydi.
+- Har sahifa natijasi `uploads/ocr-cache/<sha256>/` ga yoziladi: restart yoki
+  qayta ishlashda tayyor sahifalar qayta o'qilmaydi.
+- Adminkada: "Matn manbai" ustuni (Matn / OCR / Aralash + ishonch %), jarayon
+  ("OCR: 145/480 sahifa"), **OCR bilan qayta ishlash** (matn qatlami buzuq
+  bo'lsa barcha sahifalarni OCR qiladi) va **To'xtatish** tugmalari.
+
+Tesseract o'rnatilmagan bo'lsa, `manage.py check` ogohlantiradi. Batafsil reja va
+keyingi bosqich (alohida OCR server) — [ocr-plan.md](ocr-plan.md).
+
 ---
 
 ## Tezkor start
@@ -237,7 +260,7 @@ Har bir yo'l oxirgi `/` bilan ham, usiz ham ishlaydi.
 | `API_REQUIRE_AUTH` | `true` | API'ni token ostiga oladi |
 | `JWT_ACCESS_MINUTES` / `JWT_REFRESH_DAYS` | `60` / `14` | Token muddati |
 | `UPLOADS_DIR` | `<project>/uploads` | `raw/` va `ready/` shu yerda |
-| `MAX_UPLOAD_MB` | `200` | Bundan kattasi HTTP 413 |
+| `MAX_UPLOAD_MB` | `500` | Bundan kattasi HTTP 413 (nginx `client_max_body_size` ham mos bo'lsin) |
 | `PIPELINE_CONCURRENCY` | `2` | Bir vaqtda konvertatsiya qilinadigan hujjatlar |
 | `PIPELINE_RUN_SYNC` | `false` | Pipeline'ni fon o'rniga inline ishlatish |
 | `OWUI_URL` / `OWUI_API_KEY` | — | Open WebUI integratsiyasi |
@@ -250,6 +273,14 @@ Har bir yo'l oxirgi `/` bilan ham, usiz ham ishlaydi.
 | `OWUI_SHARE_WITH_USERS` | `true` | Agentlar va KB'larni barcha Open WebUI foydalanuvchilariga ochish |
 | `OWUI_RETRY_ATTEMPTS` / `OWUI_RETRY_BASE_SECONDS` / `OWUI_RETRY_MAX_SECONDS` | `6` / `20` / `300` | Embedding 429/503 bilan rad etilsa qayta urinish (kutish ikki baravar oshadi) |
 | `PIPELINE_RESUME_ON_START` | `true` | Restartda uzilgan materiallarni qayta navbatga qo'yish |
+| `OCR_BACKEND` | `local` | `local` — Tesseract shu serverda; `none` — OCR o'chiq |
+| `OCR_LANGUAGES` / `OCR_AUTO_LANGUAGE` | `uzb+uzb_cyrl+rus` / `true` | Dastlabki sahifalar tillari; yozuv aniqlangach bitta tilga toraytirish |
+| `OCR_DPI` | `300` | Sahifani rasmga aylantirish aniqligi |
+| `OCR_CONCURRENCY` / `OCR_PAGE_WORKERS` | `1` / `2` | Parallel OCR hujjatlar / bitta hujjatdagi parallel sahifalar |
+| `OCR_PAGE_TIMEOUT_SECONDS` | `120` | Bitta sahifaga ajratilgan vaqt |
+| `OCR_MIN_CONFIDENCE` | `60` | Bundan past ishonchli sahifalar haqida ogohlantirish |
+| `OCR_MAX_PAGES` | `1000` | Bundan ko'p OCR sahifali hujjat rad etiladi |
+| `OCR_TESSERACT_CMD` / `TESSDATA_PREFIX` | `tesseract` / — | Tesseract binary va til modellari papkasi |
 | `CORS_ALLOW_ALL_ORIGINS` / `CORS_ALLOWED_ORIGINS` | `true` / — | Brauzerdan murojaat siyosati |
 | `LANGUAGE_CODE` / `TIME_ZONE` | `uz` / `Asia/Tashkent` | Lokal sozlamalar |
 
@@ -275,8 +306,9 @@ apps/
 ├── owui/                   # Open WebUI REST klienti va diagnostika endpointlari
 └── pipeline/
     ├── services/           # parser.py, cleaner.py, translit.py, chunker.py
+    ├── ocr/                # Skan PDF: aniqlash, Tesseract, kesh, tozalash
     ├── service.py          # Uchdan-uchgacha koordinator
-    └── runner.py           # Fon rejimidagi ishlov (thread pool + in-flight registry)
+    └── runner.py           # Fon rejimidagi ishlov (default + ocr navbatlari)
 templates/admin/            # Dashboard, kontent daraxti, yuklash formasi, Markdown
 tests/                      # pytest: pipeline, API, auth, adminka oqimlari
 ```

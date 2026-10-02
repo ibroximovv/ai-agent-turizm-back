@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from config.app_config import build_owui_config, build_uploads_config
+from config.app_config import build_ocr_config, build_owui_config, build_uploads_config
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +18,9 @@ def isolated_environment(settings, tmp_path: Path):
         uploads_dir=str(tmp_path / "uploads"), max_upload_mb=5, base_dir=tmp_path
     )
     settings.OWUI = build_owui_config(url="http://localhost:9", api_key="", timeout_ms=1000)
+    # Whether Tesseract is installed must not change what the suite does; OCR
+    # tests switch it on with a fake backend (tests/pipeline/ocr_helpers.py).
+    settings.OCR = build_ocr_config(backend="none")
     # Pipeline runs inline, so a test can assert on the result immediately.
     settings.PIPELINE_RUN_SYNC = True
     return settings

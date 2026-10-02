@@ -35,6 +35,12 @@ class MaterialStatus(models.TextChoices):
     FAILED = "failed", _("Xatolik")
 
 
+class ExtractionMethod(models.TextChoices):
+    TEXT = "text", _("Matn qatlami")
+    OCR = "ocr", _("OCR")
+    MIXED = "mixed", _("Aralash")
+
+
 class LogLevel(models.TextChoices):
     INFO = "info", _("Ma'lumot")
     WARN = "warn", _("Ogohlantirish")
@@ -158,6 +164,25 @@ class Material(UUIDModel, TimestampedModel):
     char_count = models.IntegerField(_("Belgilar soni"), default=0)
     detected_script = models.CharField(
         _("Aniqlangan yozuv"), max_length=30, null=True, blank=True
+    )
+    extraction_method = models.CharField(
+        _("Matn manbai"), max_length=10, choices=ExtractionMethod.choices,
+        null=True, blank=True,
+        help_text=_("Matn PDF ichidan olinganmi yoki skanerdan OCR qilinganmi."),
+    )
+    ocr_page_count = models.IntegerField(_("OCR sahifalar"), default=0)
+    ocr_confidence = models.FloatField(
+        _("OCR ishonchi (%)"), null=True, blank=True,
+        help_text=_("OCR qilingan sahifalardagi so'zlarning o'rtacha ishonch bali."),
+    )
+    ocr_languages = models.CharField(_("OCR tillari"), max_length=60, null=True, blank=True)
+    force_ocr = models.BooleanField(
+        _("Majburiy OCR"), default=False,
+        help_text=_("Matn qatlami bo'lsa ham barcha sahifalar OCR qilinadi."),
+    )
+    progress_message = models.CharField(
+        _("Jarayon"), max_length=200, null=True, blank=True,
+        help_text=_("Uzoq konvertatsiya davomida, masalan: OCR 145/480 sahifa."),
     )
     owui_file_id = models.CharField(
         _("Open WebUI fayl ID"), max_length=64, null=True, blank=True

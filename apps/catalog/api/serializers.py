@@ -160,6 +160,8 @@ class MaterialSerializer(serializers.ModelSerializer):
             "id", "topic_id", "type", "raw_file_path", "original_filename",
             "file_size", "file_hash", "status", "error_message", "md_file_path",
             "chunk_count", "char_count", "detected_script", "owui_file_id",
+            "extraction_method", "ocr_page_count", "ocr_confidence", "ocr_languages",
+            "force_ocr", "progress_message",
             "indexed_at", "created_at", "updated_at",
             "topic", "module", "uploaded_by_email",
         ]

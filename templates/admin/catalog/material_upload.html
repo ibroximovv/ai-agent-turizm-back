@@ -330,7 +330,8 @@
               setState(item, row.label, "text-green-600 dark:text-green-400");
             } else {
               busy = true;
-              setState(item, row.label, "text-primary-600 dark:text-primary-400");
+              // A long OCR run reports "OCR: 145/480 sahifa" instead of a bare status.
+              setState(item, row.progress || row.label, "text-primary-600 dark:text-primary-400");
             }
           }
           if (busy) setTimeout(pollStatuses, 2500);

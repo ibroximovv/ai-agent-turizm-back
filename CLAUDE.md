@@ -36,7 +36,18 @@ This project is the **Backend API, Admin Panel and Ingestion Pipeline** for the
    - Russian texts (`ru`) are preserved as-is without transliteration.
    - Corrupted PDF font encodings (`final -ии` → `-ий`) and all-caps digraphs
      (`TO‘RTINChI` → `TO‘RTINCHI`) are repaired automatically.
-3. **Open WebUI Integration — the admin panel is the source of truth**
+3. **OCR for scanned PDFs (`apps/pipeline/ocr/`)**
+   - A PDF page whose text layer is missing, sparse or junk *and* which holds
+     an image is rendered with PDFium (`pypdfium2`, every call serialised —
+     PDFium is not thread-safe) and read by the `tesseract` CLI.
+   - Backends implement `OcrBackend.ocr_pages(pdf, pages, …)` — PDF pages in,
+     not images — so the planned remote OCR server (ocr-plan.md) is a new
+     backend, not a pipeline change.
+   - Per-page results are cached under `UPLOADS_DIR/ocr-cache/<file_hash>/`;
+     a restart or retry resumes a 500-page book instead of starting over.
+   - Grounding labels stay `page N` and the frontmatter is unchanged; OCR
+     metadata lives on `materials` (`extraction_method`, `ocr_*`).
+4. **Open WebUI Integration — the admin panel is the source of truth**
    - Pure HTTP REST integration (`OWUI_URL` + Bearer `OWUI_API_KEY`) via httpx.
    - Every module owns one Knowledge Base (`modules.owui_kb_id`) and one agent
      (`modules.owui_model_id`, a workspace model preset reading only that KB).
@@ -128,8 +139,9 @@ apps/
     ├── services/cleaner.py   # Typography, line unwrap, font repair (uses `regex`)
     ├── services/translit.py  # Script detection & Uzbek Cyrillic → Latin
     ├── services/chunker.py   # Grounding marker injection (~600 chars) & frontmatter
+    ├── ocr/                  # Scanned PDF pages: detect, backends, cache, cleanup
     ├── service.py            # End-to-end pipeline coordinator
-    ├── runner.py             # Thread pool + in-flight registry
+    ├── runner.py             # Thread pools ("default" + "ocr" lanes) + in-flight registry
     └── recovery.py           # Re-queues materials a restart interrupted
 templates/admin/            # dashboard.html, catalog/{content_tree,material_upload,
                             #   material_markdown,material_list_before}.html
@@ -198,6 +210,9 @@ Module (1) ───< (N) Topic (1) ───< (N) Material (1) ───< (N) A
 - Worker threads must not hold database connections open: `runner` calls
   `close_old_connections()` around each task.
 - Set `PIPELINE_RUN_SYNC=true` in tests so results are observable immediately.
+- Scanned PDFs go to a separate "ocr" lane (`OCR_CONCURRENCY`), chosen by
+  `service.lane_for`. Both lanes share the in-flight registry and the cancel
+  events (`runner.cancel()`), which a long OCR run polls between pages.
 - The queue is in-process: `config/wsgi.py` calls
   `recovery.resume_in_background()` so rows left `queued` / `converting` /
   `uploading` by a restart are submitted again.
@@ -240,6 +255,11 @@ Module (1) ───< (N) Topic (1) ───< (N) Material (1) ───< (N) A
   original TypeScript specs — treat those assertions as the contract.
 - `tests/conftest.py` forces uploads into `tmp_path` and blanks `OWUI_API_KEY`,
   because the developer `.env` points at a live Open WebUI instance.
+- `tests/conftest.py` also sets `OCR_BACKEND=none`. OCR tests use the fake
+  backend and scanned-PDF builders in `tests/pipeline/ocr_helpers.py`; the two
+  tests that run the real Tesseract are skipped without it. When rendering
+  Uzbek Cyrillic test pages, use a font that has қ ғ ҳ (Noto/DejaVu Serif) —
+  Liberation Serif draws boxes, which Tesseract reads as "П".
 - `tests/owui/fake_owui.py` is an in-memory Open WebUI behind
   `httpx.MockTransport`; use its `owui` fixture pattern (see
   `tests/owui/test_sync.py`) for anything that talks to Open WebUI.

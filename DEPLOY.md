@@ -42,6 +42,11 @@ npm install -g pm2
 
 # psycopg uchun kerak bo'ladigan kutubxonalar
 sudo apt update && sudo apt install -y libpq5
+
+# Skanerlangan PDF'lar uchun OCR (o'zbek lotin + kirill, rus, ingliz)
+sudo apt install -y tesseract-ocr tesseract-ocr-uzb tesseract-ocr-uzb-cyrl \
+    tesseract-ocr-rus tesseract-ocr-eng
+tesseract --list-langs     # uzb, uzb_cyrl, rus, eng ko'rinishi kerak
 ```
 
 ---

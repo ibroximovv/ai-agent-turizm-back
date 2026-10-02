@@ -7,10 +7,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from apps.pipeline.ocr import OcrUnavailableError
+from apps.pipeline.ocr.cleanup import clean_ocr_pages
+from apps.pipeline.ocr.detect import SPARSE_PAGE_THRESHOLD, page_needs_ocr
+from apps.pipeline.ocr.document import OcrOutcome, OcrRequest, ocr_document
+
 logger = logging.getLogger(__name__)
 
-#: Below this, a PDF page is most likely a scanned image rather than text.
-SPARSE_PAGE_THRESHOLD = 40
 
 _MARKDOWN_HEADING_SPLIT = re.compile(r"(?m)(?=^#{1,3}\s)")
 _BLANK_LINE_SPLIT = re.compile(r"(?:\r?\n){3,}")
@@ -27,19 +30,40 @@ class ParsedChunk:
     text: str
 
 
+@dataclass(frozen=True)
+class OcrStats:
+    #: Pages whose text came from OCR.
+    pages: int
+    #: Mean word confidence over those pages, 0–100.
+    confidence: float | None
+    languages: str
+    engine: str
+
+
 @dataclass
 class ParsedDocument:
     chunks: list[ParsedChunk] = field(default_factory=list)
     total_chars: int = 0
     warnings: list[str] = field(default_factory=list)
+    #: Set when OCR ran on at least one page.
+    ocr: OcrStats | None = None
+
+    @property
+    def extraction_method(self) -> str:
+        """"text", "ocr" (every page) or "mixed"."""
+        if self.ocr is None or self.ocr.pages == 0:
+            return "text"
+        return "ocr" if self.ocr.pages >= len(self.chunks) else "mixed"
 
 
-def parse_file(file_path: Path | str) -> ParsedDocument:
+def parse_file(file_path: Path | str, ocr: OcrRequest | None = None) -> ParsedDocument:
+    """`ocr` enables OCR for PDF pages without a usable text layer; without it
+    such pages are skipped with a warning."""
     path = Path(file_path)
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
-        return _parse_pdf(path)
+        return _parse_pdf(path, ocr)
     if suffix == ".pptx":
         return _parse_pptx(path)
     if suffix == ".docx":
@@ -53,38 +77,103 @@ def parse_file(file_path: Path | str) -> ParsedDocument:
     )
 
 
-def _parse_pdf(path: Path) -> ParsedDocument:
-    from pypdf import PdfReader
-
+def _parse_pdf(path: Path, ocr: OcrRequest | None = None) -> ParsedDocument:
     warnings: list[str] = []
-    chunks: list[ParsedChunk] = []
-    total_chars = 0
+    texts, ocr_pages = _read_text_layer(path, ocr)
 
-    try:
-        reader = PdfReader(str(path))
-        for index, page in enumerate(reader.pages, start=1):
-            page_text = (page.extract_text() or "").strip()
-            if not page_text:
-                continue
+    stats: OcrStats | None = None
+    if ocr_pages:
+        try:
+            outcome = ocr_document(path, ocr_pages, ocr)
+        except OcrUnavailableError as exc:
+            # Not the document's fault: keep whatever text layer there is, as
+            # before OCR existed, rather than failing a mostly-text PDF.
+            warnings.append(f"OCR ishlamadi, sahifalar matn qatlamidan olindi: {exc}")
+            ocr_pages = []
+        else:
+            stats = _apply_ocr(outcome, texts, ocr, warnings)
 
-            if len(page_text) < SPARSE_PAGE_THRESHOLD:
-                warnings.append(
-                    f"{index}-sahifada juda kam matn bor ({len(page_text)} belgi) — "
-                    "skanerlangan rasm bo'lishi mumkin."
-                )
+    for index in sorted(texts):
+        if index not in ocr_pages and len(texts[index]) < SPARSE_PAGE_THRESHOLD:
+            warnings.append(
+                f"{index}-sahifada juda kam matn bor ({len(texts[index])} belgi) — "
+                "skanerlangan rasm bo'lishi mumkin."
+            )
 
-            chunks.append(ParsedChunk(label=f"page {index}", text=page_text))
-            total_chars += len(page_text)
-    except Exception as exc:
-        logger.error("PDF parse xatosi %s: %s", path, exc)
-        raise RuntimeError(f"PDF o'qib bo'lmadi: {exc}") from exc
-
+    chunks = [ParsedChunk(label=f"page {index}", text=texts[index]) for index in sorted(texts)]
     if not chunks:
         warnings.append(
             "PDF ichidan matn topilmadi — hujjat skanerlangan va OCR talab qiladi."
         )
 
-    return ParsedDocument(chunks=chunks, total_chars=total_chars, warnings=warnings)
+    return ParsedDocument(
+        chunks=chunks,
+        total_chars=sum(len(chunk.text) for chunk in chunks),
+        warnings=warnings,
+        ocr=stats,
+    )
+
+
+def _read_text_layer(path: Path, ocr: OcrRequest | None) -> tuple[dict[int, str], list[int]]:
+    """Text of every page, and the pages that need OCR instead.
+
+    A function of its own so the reader is freed before OCR starts, and fed a
+    file handle: given a path, pypdf reads the whole file into memory — for a
+    400 MB scanned book, for the half hour its OCR takes.
+    """
+    from pypdf import PdfReader
+
+    texts: dict[int, str] = {}
+    ocr_pages: list[int] = []
+    try:
+        with path.open("rb") as handle:
+            reader = PdfReader(handle)
+            for index, page in enumerate(reader.pages, start=1):
+                page_text = (page.extract_text() or "").strip()
+                if ocr is not None and (ocr.force or page_needs_ocr(page, page_text)):
+                    ocr_pages.append(index)
+                if page_text:
+                    texts[index] = page_text
+    except Exception as exc:
+        logger.error("PDF parse xatosi %s: %s", path, exc)
+        raise RuntimeError(f"PDF o'qib bo'lmadi: {exc}") from exc
+    return texts, ocr_pages
+
+
+def _apply_ocr(
+    outcome: OcrOutcome, texts: dict[int, str], ocr: OcrRequest, warnings: list[str]
+) -> OcrStats:
+    """Replace the text layer of every OCR'd page that produced text."""
+    recognised = clean_ocr_pages(
+        {page: result.text for page, result in outcome.pages.items() if result.text}
+    )
+    replaced = 0
+    for page, text in recognised.items():
+        if text:
+            texts[page] = text
+            replaced += 1
+
+    failed = outcome.failed()
+    if failed:
+        warnings.append(f"OCR: {len(failed)} ta sahifa o'qilmadi: {_page_list(failed)}")
+    low = outcome.low_confidence(ocr.min_confidence)
+    if low:
+        warnings.append(
+            f"OCR: {len(low)} ta sahifa past ishonch bilan o'qildi "
+            f"(< {ocr.min_confidence:.0f}%): {_page_list(low)}"
+        )
+
+    return OcrStats(
+        pages=replaced,
+        confidence=outcome.confidence,
+        languages=outcome.languages,
+        engine=ocr.backend.name,
+    )
+
+
+def _page_list(pages: list[int], limit: int = 30) -> str:
+    shown = ", ".join(str(page) for page in pages[:limit])
+    return shown + (f" … (+{len(pages) - limit})" if len(pages) > limit else "")
 
 
 def _parse_pptx(path: Path) -> ParsedDocument:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from django.conf import settings
@@ -12,20 +13,42 @@ from apps.catalog.models import AuditLog, LogLevel, Material, MaterialStatus, Mo
 from apps.owui.client import OwuiError, get_owui_client
 from apps.owui.sync import ensure_module_kb, sync_master_agent, sync_module_agent
 from apps.pipeline import runner
+from apps.pipeline.ocr import OcrCancelledError, get_ocr_backend
+from apps.pipeline.ocr.cache import OcrCache
+from apps.pipeline.ocr.detect import pdf_needs_ocr
+from apps.pipeline.ocr.document import OcrRequest
 from apps.pipeline.services.chunker import GroundingMetadata, build_grounded_markdown
 from apps.pipeline.services.cleaner import clean_text
 from apps.pipeline.services.parser import ParsedChunk, parse_file
 from apps.pipeline.services.translit import detect_script, to_latin
-from config.app_config import uploads_config
+from config.app_config import ocr_config, uploads_config
 
 logger = logging.getLogger(__name__)
 
 #: Characters of document text inspected when detecting the script.
 SCRIPT_SAMPLE_CHARS = 8000
+#: Minimum gap between two OCR progress writes to the database.
+PROGRESS_INTERVAL_SECONDS = 2.0
 
 
 def is_processing(material_id: str) -> bool:
     return runner.is_processing(material_id)
+
+
+def lane_for(material_id: str) -> str:
+    """Queue a material belongs on: scanned PDFs get the OCR lane."""
+    if not ocr_config().enabled:
+        return runner.DEFAULT_LANE
+    row = (
+        Material.objects.filter(pk=material_id)
+        .values("raw_file_path", "force_ocr")
+        .first()
+    )
+    if row is None or not row["raw_file_path"].lower().endswith(".pdf"):
+        return runner.DEFAULT_LANE
+    if pdf_needs_ocr(row["raw_file_path"], force=row["force_ocr"]):
+        return runner.OCR_LANE
+    return runner.DEFAULT_LANE
 
 
 def process_material(material_id: str) -> Material:
@@ -51,6 +74,9 @@ def process_material(material_id: str) -> Material:
         return material
 
     try:
+        if runner.is_cancelled(str(material.id)):
+            raise OcrCancelledError("Navbatdaligida to'xtatildi")
+
         # 1. Stage: CONVERTING
         _set_status(material, MaterialStatus.CONVERTING, error_message=None)
         _log_audit(
@@ -61,10 +87,13 @@ def process_material(material_id: str) -> Material:
             f'Hujjatni o\'qish boshlandi: "{material.original_filename}"',
         )
 
-        # 2. Parse the raw file
-        parsed = parse_file(material.raw_file_path)
+        # 2. Parse the raw file (OCR'ing scanned PDF pages on the way)
+        parsed = parse_file(material.raw_file_path, ocr=_build_ocr_request(material, module))
         if not parsed.chunks:
-            raise ValueError("Hujjatdan matn ajratib bo'lmadi — indekslash uchun kontent yo'q.")
+            reason = f" {parsed.warnings[-1]}" if parsed.warnings else ""
+            raise ValueError(
+                f"Hujjatdan matn ajratib bo'lmadi — indekslash uchun kontent yo'q.{reason}"
+            )
 
         # 3. Clean and transliterate
         detected = detect_script(_build_script_sample(parsed.chunks))
@@ -102,6 +131,11 @@ def process_material(material_id: str) -> Material:
         material.md_file_path = str(result.file_path)
         material.chunk_count = result.chunk_count
         material.char_count = result.char_count
+        material.extraction_method = parsed.extraction_method
+        material.ocr_page_count = parsed.ocr.pages if parsed.ocr else 0
+        material.ocr_confidence = parsed.ocr.confidence if parsed.ocr else None
+        material.ocr_languages = parsed.ocr.languages if parsed.ocr else None
+        material.progress_message = None
         material.status = MaterialStatus.MD_READY
         material.save(
             update_fields=[
@@ -109,10 +143,28 @@ def process_material(material_id: str) -> Material:
                 "md_file_path",
                 "chunk_count",
                 "char_count",
+                "extraction_method",
+                "ocr_page_count",
+                "ocr_confidence",
+                "ocr_languages",
+                "progress_message",
                 "status",
                 "updated_at",
             ]
         )
+
+        if parsed.ocr is not None:
+            confidence = (
+                f"{parsed.ocr.confidence:.0f}%" if parsed.ocr.confidence is not None else "—"
+            )
+            _log_audit(
+                material.id,
+                module.id,
+                "ocr",
+                LogLevel.INFO,
+                f"OCR tugadi: {parsed.ocr.pages} ta sahifa, o'rtacha ishonch {confidence}, "
+                f"tillar: {parsed.ocr.languages}",
+            )
 
         _log_audit(
             material.id,
@@ -132,14 +184,19 @@ def process_material(material_id: str) -> Material:
 
         return material
 
+    except OcrCancelledError as exc:
+        logger.info("Material %s to'xtatildi: %s", material_id, exc)
+        # The row may be gone already (a delete is what usually cancels), so
+        # an update that matches nothing is fine here — save() would raise.
+        _mark_failed(material, f"To'xtatildi: {exc}")
+        _log_audit(material.id, module.id, "pipeline", LogLevel.WARN, f"To'xtatildi: {exc}")
+        return material
+
     except Exception as exc:
         message = str(exc)
         logger.error("Pipeline xatosi (material %s): %s", material_id, message)
 
-        material.status = MaterialStatus.FAILED
-        material.error_message = message
-        material.save(update_fields=["status", "error_message", "updated_at"])
-
+        _mark_failed(material, message)
         _log_audit(
             material.id, module.id, "pipeline", LogLevel.ERROR, f"Pipeline xatosi: {message}"
         )
@@ -310,6 +367,65 @@ def _sync_agents(material: Material, module: Module, client) -> None:
     if master_id:
         message += f"; umumiy agent yangilandi: {master_id}"
     _log_audit(material.id, module.id, "agent_sync", LogLevel.INFO, message)
+
+
+def _build_ocr_request(material: Material, module: Module) -> OcrRequest | None:
+    """None when OCR is switched off or the file is not a PDF."""
+    config = ocr_config()
+    backend = get_ocr_backend(config)
+    if backend is None or not material.raw_file_path.lower().endswith(".pdf"):
+        return None
+
+    try:
+        cache = OcrCache(uploads_config().ocr_cache_dir, material.file_hash or "", config.dpi)
+    except ValueError:
+        cache = None  # legacy rows without a hash: OCR still works, just uncached
+
+    def on_log(level: str, message: str) -> None:
+        _log_audit(material.id, module.id, "ocr", level, message)
+
+    return OcrRequest(
+        backend=backend,
+        languages=config.languages,
+        cache=cache,
+        auto_language=config.auto_language,
+        force=material.force_ocr,
+        max_pages=config.max_pages,
+        min_confidence=config.min_confidence,
+        on_progress=_ProgressReporter(material.id),
+        on_log=on_log,
+        cancel=runner.cancel_event(str(material.id)),
+    )
+
+
+class _ProgressReporter:
+    """Writes "OCR: 145/480 sahifa" onto the row, at most every couple of
+    seconds — the admin polls it, nobody needs every page."""
+
+    def __init__(self, material_id):
+        self.material_id = material_id
+        self.last_write = 0.0
+
+    def __call__(self, done: int, total: int) -> None:
+        now = time.monotonic()
+        if done < total and now - self.last_write < PROGRESS_INTERVAL_SECONDS:
+            return
+        self.last_write = now
+        Material.objects.filter(pk=self.material_id).update(
+            progress_message=f"OCR: {done}/{total} sahifa"
+        )
+
+
+def _mark_failed(material: Material, message: str) -> None:
+    material.status = MaterialStatus.FAILED
+    material.error_message = message
+    material.progress_message = None
+    Material.objects.filter(pk=material.pk).update(
+        status=MaterialStatus.FAILED,
+        error_message=message,
+        progress_message=None,
+        updated_at=timezone.now(),
+    )
 
 
 def _set_status(material: Material, status: str, error_message: str | None = ...) -> None:

@@ -22,7 +22,8 @@ from apps.common.filename import (
 from apps.owui.client import OwuiError, get_owui_client
 from apps.owui.sync import sync_module
 from apps.pipeline import runner
-from config.app_config import uploads_config
+from apps.pipeline.ocr.cache import remove_cache
+from config.app_config import ocr_config, uploads_config
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,34 @@ def retry_material(material: Material) -> Material:
     material.save(update_fields=["status", "error_message", "updated_at"])
 
     runner.submit(str(material.id))
+    return material
+
+
+def reprocess_with_ocr(material: Material) -> Material:
+    """OCR every page from scratch, text layer or not.
+
+    For PDFs whose text layer is present but wrong (a broken font encoding, an
+    old OCR layer in the wrong language). The flag stays on the material, so
+    later retries keep using OCR.
+    """
+    if not ocr_config().enabled:
+        raise ValidationError("OCR o'chirilgan (OCR_BACKEND=none)")
+    if not material.raw_file_path.lower().endswith(".pdf"):
+        raise ValidationError("OCR faqat PDF fayllar uchun")
+    if runner.is_processing(str(material.id)):
+        raise Conflict("Bu material hozir ishlanmoqda — joriy ishlov tugashini kuting")
+
+    material.force_ocr = True
+    material.save(update_fields=["force_ocr", "updated_at"])
+    remove_cache(uploads_config().ocr_cache_dir, material.file_hash)
+    return retry_material(material)
+
+
+def cancel_material(material: Material) -> Material:
+    """Stop a queued or running material; a running OCR stops after its
+    current pages. The pipeline then marks it failed."""
+    if not runner.cancel(str(material.id)):
+        raise Conflict("Bu material hozir ishlanmayapti")
     return material
 
 

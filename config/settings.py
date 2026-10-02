@@ -12,7 +12,7 @@ from pathlib import Path
 
 import environ
 
-from config.app_config import build_owui_config, build_uploads_config
+from config.app_config import build_ocr_config, build_owui_config, build_uploads_config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -322,7 +322,7 @@ UNFOLD = {
 # Storage & uploads
 # --------------------------------------------------------------------------
 
-MAX_UPLOAD_MB = env.int("MAX_UPLOAD_MB", default=200)
+MAX_UPLOAD_MB = env.int("MAX_UPLOAD_MB", default=500)
 UPLOADS = build_uploads_config(
     uploads_dir=env.str("UPLOADS_DIR", default="") or None,
     max_upload_mb=MAX_UPLOAD_MB,
@@ -381,6 +381,24 @@ PIPELINE_RESUME_ON_START = env.bool("PIPELINE_RESUME_ON_START", default=True)
 PIPELINE_CONCURRENCY = env.int("PIPELINE_CONCURRENCY", default=2)
 # Run the pipeline inline instead of on a worker thread (used by the tests).
 PIPELINE_RUN_SYNC = env.bool("PIPELINE_RUN_SYNC", default=False)
+
+# --------------------------------------------------------------------------
+# OCR (scanned PDF pages)
+# --------------------------------------------------------------------------
+
+OCR = build_ocr_config(
+    backend=env.str("OCR_BACKEND", default="local"),
+    languages=env.str("OCR_LANGUAGES", default="uzb+uzb_cyrl+rus"),
+    auto_language=env.bool("OCR_AUTO_LANGUAGE", default=True),
+    dpi=env.int("OCR_DPI", default=300),
+    concurrency=env.int("OCR_CONCURRENCY", default=1),
+    page_workers=env.int("OCR_PAGE_WORKERS", default=2),
+    page_timeout_seconds=env.float("OCR_PAGE_TIMEOUT_SECONDS", default=120.0),
+    min_confidence=env.float("OCR_MIN_CONFIDENCE", default=60.0),
+    max_pages=env.int("OCR_MAX_PAGES", default=1000),
+    tesseract_cmd=env.str("OCR_TESSERACT_CMD", default="tesseract"),
+    tessdata_dir=env.str("TESSDATA_PREFIX", default=""),
+)
 
 # --------------------------------------------------------------------------
 # I18N / misc
